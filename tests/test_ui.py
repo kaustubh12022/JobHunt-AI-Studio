@@ -145,6 +145,8 @@ def test_processing_error_state(studio, monkeypatch):
 
 
 def test_pipeline_escapes_inputs_and_filters_attention():
+    from ui import render_ats_checklist, render_health_card
+
     html = pipeline_html("Scoring", '<img src=x onerror="alert(1)">', "Engineer")
     assert "<img" not in html
     assert "&lt;img" in html
@@ -153,3 +155,11 @@ def test_pipeline_escapes_inputs_and_filters_attention():
                {"company": "Gamma", "pdf_path": "resume.pdf", "scoring_status": "fallback"}]
     assert len(filter_results(results, "", "Needs attention")) == 2
     assert filter_results(results, "BETA", "Skipped") == [results[1]]
+
+    health_html = render_health_card({"status": "healthy", "checks": {"storage": {"free_space_mb": 500}}})
+    assert "System Health" in health_html
+    assert "healthy" in health_html
+
+    ats_html = render_ats_checklist({"passed": True, "page_count": 1, "errors": [], "warnings": []})
+    assert "Universal ATS Compliance Passed" in ats_html
+    assert "Strict 1-Page Constraint" in ats_html
