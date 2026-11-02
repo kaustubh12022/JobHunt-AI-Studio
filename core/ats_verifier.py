@@ -13,16 +13,19 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pypdf
 try:
-    import fitz  # PyMuPDF
+    import pymupdf as fitz
 except ImportError:
-    fitz = None
+    try:
+        import fitz
+    except ImportError:
+        fitz = None
 
 
-def audit_resume_pdf(pdf_path: str) -> Dict[str, Any]:
+def audit_resume_pdf(pdf_path: str, candidate_location: Optional[str] = None) -> Dict[str, Any]:
     results: Dict[str, Any] = {
         "passed": True,
         "errors": [],
@@ -132,8 +135,15 @@ def audit_resume_pdf(pdf_path: str) -> Dict[str, Any]:
         flags=re.IGNORECASE
     )
     header_text = header_match[0] if header_match else full_text[:250]
-    location_keywords = ["Pune", "Maharashtra", "India", "Bangalore", "Delhi", "Mumbai", "Hyderabad", "Noida", "Remote", "USA", "Canada", "UK"]
-    found_loc = any(loc.lower() in header_text.lower() for loc in location_keywords)
+    location_keywords = [
+        "pune", "maharashtra", "india", "bangalore", "delhi", "mumbai", "hyderabad", "noida",
+        "remote", "usa", "canada", "uk", "california", "san francisco", "new york", "london",
+        "berlin", "germany", "singapore", "tokyo", "japan", "sydney", "australia", "france", "paris"
+    ]
+    found_loc = any(loc in header_text.lower() for loc in location_keywords)
+    if not found_loc and candidate_location:
+        cand_tokens = [t.strip().lower() for t in re.split(r'[,|/\s]+', str(candidate_location)) if len(t.strip()) > 2]
+        found_loc = any(tok in header_text.lower() for tok in cand_tokens)
     if not found_loc:
         results["warnings"].append(
             "CANDIDATE LOCATION: Location keyword not detected in top header contact block."

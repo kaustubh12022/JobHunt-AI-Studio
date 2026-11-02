@@ -21,6 +21,10 @@ htmlcov/
 
 # Temporary data & artifacts
 temp/
+output/
+test_output/
+*.pdf
+*.zip
 *.tmp
 *.log
 *.sqlite

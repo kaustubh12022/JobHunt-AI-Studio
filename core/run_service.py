@@ -79,11 +79,9 @@ class RunService:
         if self.check_storage_pressure():
             raise RuntimeError("Storage pressure: available disk space is too low to accept new runs.")
 
-        active_count = self.store.get_active_runs_count()
-        if active_count >= MAX_ACTIVE_RUNS:
-            queued_count = self.store.get_queued_runs_count()
-            if queued_count >= MAX_QUEUED_RUNS:
-                raise RuntimeError(f"Queue saturation: system already has {queued_count} queued runs.")
+        queued_count = self.store.get_queued_runs_count()
+        if queued_count >= MAX_QUEUED_RUNS:
+            raise RuntimeError(f"Queue saturation: system already has {queued_count} queued runs.")
 
         plain_code = generate_recovery_code()
         code_hash = hash_recovery_code(plain_code)
@@ -122,13 +120,24 @@ class RunService:
         recovery_code: str,
         api_keys: List[str],
         background: bool = True,
+        expected_fingerprint: Optional[str] = None,
     ) -> Optional[asyncio.Task]:
         """
         Starts or resumes a run after verifying the recovery code.
         Injects API keys into run-scoped memory only.
+        If expected_fingerprint is provided, verifies that batch inputs have not changed.
         """
         if not self.store.verify_recovery(run_id, recovery_code):
             raise PermissionError("Invalid recovery code for this run.")
+
+        run = self.store.get_run(run_id)
+        if not run:
+            raise ValueError(f"Run {run_id} not found.")
+
+        if expected_fingerprint:
+            stored_fp = run.get("input_fingerprint")
+            if stored_fp and stored_fp != expected_fingerprint:
+                raise ValueError("Changed inputs detected: inputs do not match checkpoint fingerprint. A new run must be created.")
 
         clean_keys = [k.strip() for k in api_keys if k and k.strip()]
         if not clean_keys:
@@ -145,9 +154,17 @@ class RunService:
             return task
         else:
             # Synchronous execution
-            loop = asyncio.get_event_loop()
-            loop.run_until_complete(self._run_worker(run_id, worker_id))
-            return None
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop and loop.is_running():
+                task = asyncio.create_task(self._run_worker(run_id, worker_id))
+                self._active_tasks[run_id] = task
+                return task
+            else:
+                asyncio.run(self._run_worker(run_id, worker_id))
+                return None
 
     def pause_run(self, run_id: str, recovery_code: str):
         """Signals worker to pause execution after the current job finishes."""
@@ -366,50 +383,57 @@ class RunService:
                 # Renew worker lease
                 self.store.renew_lease(run_id, worker_id, duration_sec=60)
 
-                # 2. Skip already successfully evaluated job
+                # 2. Check if job is already completely finished
                 if job.job_id in existing_results:
                     prev = existing_results[job.job_id]
-                    if prev.scoring_status == "success":
+                    is_verified = bool(prev.pdf_path and (prev.audit_result or {}).get("passed") is True)
+                    is_below_thresh = bool(prev.scoring_status == "success" and prev.match_score < config.score_threshold)
+                    is_cap_reached = bool(prev.status == "Cap Reached")
+                    if is_verified or is_below_thresh or is_cap_reached:
                         continue
 
-                # 3. Stage: Score
-                self.store.record_stage_event(
-                    StageEvent(
-                        event_id=uuid.uuid4().hex[:12],
-                        run_id=run_id,
-                        job_id=job.job_id,
-                        stage=Stage.SCORE.value,
-                        status="start",
-                        message=f"Scoring {job.company} — {job.title}",
-                    )
-                )
-
-                job_dict = job.to_dict()
-                scored_res = await score_job_async(
-                    job=job_dict,
-                    profile=profile,
-                    model=config.model,
-                    provider=config.provider,
-                    api_keys=api_keys,
-                    ai_client=scoped_client,
-                )
-
-                job_result = JobResult.from_dict(scored_res)
-
-                # Check if scoring failed
-                if job_result.scoring_status == "failed":
-                    self.store.save_job_result(run_id, job_result, Stage.SCORE)
+                # 3. Stage: Score (skip re-scoring if scoring already succeeded in a prior run)
+                job_result = None
+                if job.job_id in existing_results and existing_results[job.job_id].scoring_status == "success":
+                    job_result = existing_results[job.job_id]
+                else:
                     self.store.record_stage_event(
                         StageEvent(
                             event_id=uuid.uuid4().hex[:12],
                             run_id=run_id,
                             job_id=job.job_id,
                             stage=Stage.SCORE.value,
-                            status="failed",
-                            message=f"Scoring failed for {job.company}: {job_result.error}",
+                            status="start",
+                            message=f"Scoring {job.company} — {job.title}",
                         )
                     )
-                    continue
+
+                    job_dict = job.to_dict()
+                    scored_res = await score_job_async(
+                        job=job_dict,
+                        profile=profile,
+                        model=config.model,
+                        provider=config.provider,
+                        api_keys=api_keys,
+                        ai_client=scoped_client,
+                    )
+
+                    job_result = JobResult.from_dict(scored_res)
+
+                    # Check if scoring failed
+                    if job_result.scoring_status == "failed":
+                        self.store.save_job_result(run_id, job_result, Stage.SCORE)
+                        self.store.record_stage_event(
+                            StageEvent(
+                                event_id=uuid.uuid4().hex[:12],
+                                run_id=run_id,
+                                job_id=job.job_id,
+                                stage=Stage.SCORE.value,
+                                status="failed",
+                                message=f"Scoring failed for {job.company}: {job_result.error}",
+                            )
+                        )
+                        continue
 
                 # 4. Threshold & Resume Limit Check
                 score = job_result.match_score
@@ -492,16 +516,17 @@ class RunService:
                             )
 
                     except Exception as exc:
-                        job_result.status = f"Tailoring/Render Error: {str(exc)[:40]}"
+                        failed_stage = Stage.RENDER.value if job_result.tailored_resume else Stage.TAILOR.value
+                        job_result.status = f"{failed_stage} Error: {str(exc)[:40]}"
                         job_result.error = str(exc)
                         self.store.record_stage_event(
                             StageEvent(
                                 event_id=uuid.uuid4().hex[:12],
                                 run_id=run_id,
                                 job_id=job.job_id,
-                                stage=Stage.TAILOR.value,
+                                stage=failed_stage,
                                 status="failed",
-                                message=f"Tailoring failed for {job.company}: {exc}",
+                                message=f"{failed_stage} failed for {job.company}: {exc}",
                             )
                         )
                 else:

@@ -159,12 +159,30 @@ def sanitize_tailored_resume(
     # 3. Experience Bullets (Strictly bound to Master Companies & Dates)
     tailored_exp = tailored_delta.get("tailored_experience")
     if tailored_exp and isinstance(tailored_exp, list) and len(tailored_exp) > 0:
-        first_tailored = tailored_exp[0]
-        if res.get("experience_details") and len(res["experience_details"]) > 0:
-            master_exp = res["experience_details"][0]
-            new_bullets = first_tailored.get("key_responsibilities", [])
-            if new_bullets and isinstance(new_bullets, list):
-                master_exp["key_responsibilities"] = new_bullets[:4]
+        master_experiences = res.get("experience_details", [])
+        for te in tailored_exp:
+            if not isinstance(te, dict):
+                continue
+            te_company = (te.get("company") or "").strip().lower()
+            te_pos = (te.get("position") or "").strip().lower()
+            matched_exp = None
+            for me in master_experiences:
+                me_company = (me.get("company") or "").strip().lower()
+                me_pos = (me.get("position") or "").strip().lower()
+                if (te_company and (te_company in me_company or me_company in te_company)) or \
+                   (te_pos and (te_pos in me_pos or me_pos in te_pos)):
+                    matched_exp = me
+                    break
+            # Fallback to single master experience only if exactly 1 role exists
+            if not matched_exp and len(master_experiences) == 1:
+                matched_exp = master_experiences[0]
+
+            if matched_exp:
+                new_bullets = te.get("key_responsibilities", [])
+                if new_bullets and isinstance(new_bullets, list):
+                    matched_exp["key_responsibilities"] = [
+                        str(b).strip() for b in new_bullets if str(b).strip()
+                    ][:4]
 
     # 4. Projects Bullets (Strictly bound to Master Project Names)
     tailored_projs = tailored_delta.get("tailored_projects")

@@ -40,6 +40,11 @@ class RunStore:
         self.db_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = self.db_dir / "jobhunt_studio.db"
         self._init_database()
+        try:
+            self.recover_interrupted_runs()
+            self.cleanup_expired_runs()
+        except Exception as e:
+            logger.warning(f"Error during startup recovery/cleanup: {e}")
 
     @contextmanager
     def _connection(self):
@@ -501,6 +506,15 @@ class RunStore:
                 (RunStatus.PENDING.value, RunStatus.AWAITING_CREDENTIALS.value),
             ).fetchone()
             return row["c"]
+
+    def find_run_by_fingerprint(self, fingerprint: str) -> Optional[Dict[str, Any]]:
+        """Look up an existing unexpired run by input fingerprint."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM runs WHERE input_fingerprint = ? AND expires_at > ? ORDER BY created_at DESC LIMIT 1",
+                (fingerprint, time.time()),
+            ).fetchone()
+            return dict(row) if row else None
 
 
 # Global default store instance

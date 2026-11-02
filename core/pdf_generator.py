@@ -78,7 +78,7 @@ def _render_pdf_sync(
                 args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
             )
             context = browser.new_context(
-                java_script_enabled=True,
+                java_script_enabled=False,
                 bypass_csp=False,
             )
             page = context.new_page()
@@ -93,6 +93,8 @@ def _render_pdf_sync(
 
             page.route("**/*", _block_external)
 
+            cand_loc = p_info.get("address") or p_info.get("city") or p_info.get("location")
+
             try:
                 page.set_content(html_content, wait_until="load")
                 page.pdf(
@@ -102,7 +104,7 @@ def _render_pdf_sync(
                     margin={"top": "0in", "right": "0in", "bottom": "0in", "left": "0in"},
                 )
 
-                audit = audit_resume_pdf(str(pdf_path))
+                audit = audit_resume_pdf(str(pdf_path), candidate_location=cand_loc)
                 if not audit["passed"] and any("PAGE COUNT VIOLATION" in err for err in audit["errors"]):
                     logger.warning(f"PDF {filename} exceeded 1 page ({audit['details'].get('page_count')} pages). Re-rendering in compact mode...")
                     compact_html = render_html(tailored_resume, job, compact=True)
@@ -113,7 +115,7 @@ def _render_pdf_sync(
                         print_background=True,
                         margin={"top": "0in", "right": "0in", "bottom": "0in", "left": "0in"},
                     )
-                    audit = audit_resume_pdf(str(pdf_path))
+                    audit = audit_resume_pdf(str(pdf_path), candidate_location=cand_loc)
 
                 if audit["passed"]:
                     logger.info(f"ATS Audit Verified [1-Page ATS Safe]: {filename}")
