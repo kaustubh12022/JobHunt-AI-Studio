@@ -163,3 +163,48 @@ def test_pipeline_escapes_inputs_and_filters_attention():
     ats_html = render_ats_checklist({"passed": True, "page_count": 1, "errors": [], "warnings": []})
     assert "Universal ATS Compliance Passed" in ats_html
     assert "Strict 1-Page Constraint" in ats_html
+
+
+def test_sidebar_parameters_and_run_store_recovery_integration(studio, monkeypatch):
+    from core.csv_parser import generate_sample_csv_str
+    from core.run_store import run_store_instance
+    import core.scorer as scorer
+
+    app, state = studio
+    state["csv"] = generate_sample_csv_str()
+
+    async def score(job, **kwargs):
+        return {
+            **job,
+            "match_score": 85 if job["company"] != "Groww" else 45,
+            "scoring_status": "success",
+            "reason": "Match",
+            "missing_skills": [],
+        }
+
+    monkeypatch.setattr(scorer, "score_job_async", score)
+
+    app.run()
+    next(x for x in app.text_input if x.label == "Gemini API keys").set_value("ui-test-only-key").run()
+    button(app, "Start batch").click().run()
+    assert not app.exception
+
+    # Verify recovery code was saved into RunStore
+    rec_code = app.session_state.get("current_recovery_code")
+    run_id = app.session_state.get("current_run_id")
+    assert rec_code is not None
+    assert run_id is not None
+    assert run_store_instance.verify_recovery(run_id, rec_code)
+
+    # Verify that searching this recovery code in sidebar finds the run
+    app.text_input(key="sidebar_recovery_code").set_value(rec_code).run()
+    button(app, "Inspect run").click().run()
+    assert not app.exception
+    assert any(f"Run {run_id} found" in s.value for s in app.success)
+
+    # Verify filter options support Tailored & Verified, Below Threshold
+    app.selectbox(key="result_group").select("Tailored & Verified").run()
+    assert any("Showing 2 of 3" in x.value for x in app.caption)
+    app.selectbox(key="result_group").select("Below Threshold").run()
+    assert any("Showing 1 of 3" in x.value for x in app.caption)
+

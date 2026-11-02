@@ -139,6 +139,7 @@ def pipeline_html(
     complete: bool = False,
     failed: bool = False,
     rate_limit_note: Optional[str] = None,
+    elapsed_seconds: Optional[int] = None,
 ) -> str:
     """
     Renders the responsive 6-badge pipeline visualization:
@@ -153,7 +154,7 @@ def pipeline_html(
     steps = []
     for i, label in enumerate(PIPELINE_BADGES):
         state = _badge_state(label, stage, complete, failed, attempted_pdf)
-        marker = "✓" if state == "done" else ("–" if state == "skipped" else ("✕" if state == "failed" else str(i + 1)))
+        marker = "&#10003;" if state == "done" else ("&ndash;" if state == "skipped" else ("&#10005;" if state == "failed" else str(i + 1)))
         text = label + (" · skipped" if state == "skipped" else "")
         steps.append(
             f'<div class="pipeline-step {state}">'
@@ -164,14 +165,18 @@ def pipeline_html(
 
     rate_html = ""
     if rate_limit_note:
-        rate_html = f'<div class="pipeline-rate-limit"><span>⏱</span> {escape(rate_limit_note)}</div>'
+        rate_html = f'<div class="pipeline-rate-limit"><span class="rate-limit-dot">&#9679;</span> {escape(rate_limit_note)}</div>'
+
+    timer_html = ""
+    if elapsed_seconds is not None:
+        timer_html = f'<span class="pipeline-timer">{int(elapsed_seconds)}s elapsed</span>'
 
     c = counts(results)
     metrics = metric_strip((
         ("Processed", f"{c['processed']} / {total}"),
-        ("PDFs generated", c["generated"]),
+        ("Verified", c["generated"]),
         ("Skipped", c["skipped"]),
-        ("Needs attention", c["attention"]),
+        ("Failed", c["attention"]),
     ))
 
     eyebrow_text = "BATCH COMPLETE" if complete else "CURRENT ACTIVITY"
@@ -180,7 +185,10 @@ def pipeline_html(
         f'<div class="pipeline-card">'
         f'<div class="pipeline-steps">{"".join(steps)}</div>'
         f'<div class="pipeline-current">'
+        f'<div class="pipeline-current-header">'
         f'<span class="eyebrow">{eyebrow_text}</span>'
+        f'{timer_html}'
+        f'</div>'
         f'<strong>{escape(str(company))}</strong>'
         f'<span>{escape(str(role))}</span>'
         f'{rate_html}'
@@ -246,7 +254,7 @@ def render_health_card(health: Dict[str, Any]) -> str:
         f'<div class="health-card">'
         f'<div class="health-header">'
         f'<strong>System Health</strong>'
-        f'<span class="health-badge {badge_cls}">● {badge_label}</span>'
+        f'<span class="health-badge {badge_cls}">&#9679; {badge_label}</span>'
         f'</div>'
         f'<div class="health-items">'
         f'<div class="health-item"><span>Database</span><strong>{db_status}</strong></div>'
@@ -276,7 +284,7 @@ def render_ats_checklist(audit: Dict[str, Any]) -> str:
 
     items_html = []
     for label, is_pass, detail in checks:
-        icon = '<span class="ats-icon-pass">✓</span>' if is_pass else '<span class="ats-icon-fail">✕</span>'
+        icon = '<span class="ats-icon-pass">&#10003;</span>' if is_pass else '<span class="ats-icon-fail">&#10005;</span>'
         items_html.append(
             f'<div class="ats-check-item">{icon} <div><strong>{escape(label)}</strong>: <span>{escape(detail)}</span></div></div>'
         )

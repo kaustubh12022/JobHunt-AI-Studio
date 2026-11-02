@@ -130,6 +130,9 @@ if "profile_editor_pending" in st.session_state:
 for key in ("batch_results", "zip_bytes"):
     st.session_state.setdefault(key, None)
 
+# Track whether a batch run is in progress to enforce config immutability
+is_running = bool(st.session_state.get("batch_running", False))
+
 # ==========================================
 # SIDEBAR: Providers, Keys, Settings & Health
 # ==========================================
@@ -147,26 +150,30 @@ with st.sidebar:
     st.divider()
 
     st.markdown("##### AI connection")
-    provider = st.selectbox("AI Provider", ["Google Gemini", "DeepSeek", "OpenAI"])
+    if is_running:
+        st.markdown('<div class="locked-badge">&#128274; Batch running · settings locked</div>', unsafe_allow_html=True)
+
+    provider = st.selectbox("AI Provider", ["Google Gemini", "DeepSeek", "OpenAI"], disabled=is_running)
     api_keys_list: List[str] = []
     is_gemini_free = False
     gemini_rpm = 15
 
     if provider == "Google Gemini":
         with st.expander("Model & quota settings", expanded=False):
-            gemini_tier = st.radio("Gemini account tier", ["Free Tier", "Paid Tier"])
+            gemini_tier = st.radio("Gemini account tier", ["Free Tier", "Paid Tier"], disabled=is_running)
             is_gemini_free = gemini_tier == "Free Tier"
             if is_gemini_free:
                 selected_model = "gemini-3.5-flash-lite"
                 st.caption("Gemini 3.5 Flash-Lite · Free Tier cap: 15 RPM. Provider rate limits apply.")
             else:
-                selected_model = st.selectbox("Gemini Paid Model", ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash"])
-                gemini_rpm = st.number_input("Max RPM Cap", min_value=15, max_value=300, value=60)
+                selected_model = st.selectbox("Gemini Paid Model", ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash"], disabled=is_running)
+                gemini_rpm = st.number_input("Max RPM Cap", min_value=15, max_value=300, value=60, disabled=is_running)
         if is_gemini_free:
             raw_keys = st.text_input(
                 "Gemini API keys",
                 value=os.environ.get("GEMINI_API_KEYS", os.environ.get("GEMINI_API_KEY", "")),
                 type="password",
+                disabled=is_running,
                 help="Paste one key, or separate multiple keys with commas.",
             )
             api_keys_list = [k.strip() for k in raw_keys.replace("\n", ",").split(",") if k.strip()]
@@ -175,23 +182,55 @@ with st.sidebar:
                 "Gemini Paid API Key",
                 value=os.environ.get("GEMINI_API_KEY", ""),
                 type="password",
+                disabled=is_running,
             )
             api_keys_list = [single_key.strip()] if single_key.strip() else []
         ai_engine_instance.configure_keys(provider="gemini", gemini_keys=api_keys_list, gemini_rpm=gemini_rpm)
     elif provider == "DeepSeek":
         with st.expander("Model settings"):
-            selected_model = st.selectbox("DeepSeek Model", ["deepseek-chat", "deepseek-reasoner"])
-        ds_key = st.text_input("DeepSeek API Key", value=os.environ.get("DEEPSEEK_API_KEY", ""), type="password")
+            selected_model = st.selectbox("DeepSeek Model", ["deepseek-chat", "deepseek-reasoner"], disabled=is_running)
+        ds_key = st.text_input("DeepSeek API Key", value=os.environ.get("DEEPSEEK_API_KEY", ""), type="password", disabled=is_running)
         api_keys_list = [ds_key.strip()] if ds_key.strip() else []
         ai_engine_instance.configure_keys(provider="deepseek", deepseek_key=ds_key)
     else:
         with st.expander("Model settings"):
-            selected_model = st.selectbox("OpenAI Model", ["gpt-4o-mini", "gpt-4o"])
-        oa_key = st.text_input("OpenAI API Key", value=os.environ.get("OPENAI_API_KEY", ""), type="password")
+            selected_model = st.selectbox("OpenAI Model", ["gpt-4o-mini", "gpt-4o"], disabled=is_running)
+        oa_key = st.text_input("OpenAI API Key", value=os.environ.get("OPENAI_API_KEY", ""), type="password", disabled=is_running)
         api_keys_list = [oa_key.strip()] if oa_key.strip() else []
         ai_engine_instance.configure_keys(provider="openai", openai_key=oa_key)
 
     st.caption(f"{len(api_keys_list)} key(s) entered · {selected_model}" if api_keys_list else "Add an API key to enable your batch.")
+    st.divider()
+
+    # Batch Parameters in Sidebar
+    st.markdown("##### Batch parameters")
+    st.session_state.setdefault("score_threshold", 70)
+    st.session_state.setdefault("max_resumes", 20)
+    with st.expander("Threshold & resume limits", expanded=False):
+        sb_score_threshold = st.slider(
+            "Match threshold (%)",
+            40,
+            90,
+            value=int(st.session_state.get("score_threshold", 70)),
+            step=5,
+            key="sidebar_score_threshold",
+            disabled=is_running,
+            help="Generate resumes for jobs at or above this score.",
+        )
+        sb_max_resumes = st.slider(
+            "Resume limit",
+            1,
+            100,
+            value=int(st.session_state.get("max_resumes", 20)),
+            key="sidebar_max_resumes",
+            disabled=is_running,
+            help="Maximum resume generation attempts per batch.",
+        )
+        if sb_score_threshold != st.session_state.get("score_threshold", 70):
+            st.session_state["score_threshold"] = sb_score_threshold
+        if sb_max_resumes != st.session_state.get("max_resumes", 20):
+            st.session_state["max_resumes"] = sb_max_resumes
+    st.caption(f"Active: {st.session_state.get('score_threshold', 70)}% match · max {st.session_state.get('max_resumes', 20)} resumes")
     st.divider()
 
     # Recovery Code Lookup & Management
@@ -217,6 +256,20 @@ with st.sidebar:
             st.markdown(f"**Status:** `{irun['status']}`")
             st.markdown(f"**Jobs:** {irun['completed_count']} / {irun['total_jobs']} completed")
             st.markdown(f"**Verified Resumes:** {irun['verified_resumes_count']}")
+            if st.button("Load results into workspace", key="btn_load_inspected", use_container_width=True):
+                completed = run_store_instance.get_completed_job_results(irun["run_id"])
+                if completed:
+                    st.session_state.batch_results = [r.to_dict() for r in completed]
+                    st.session_state["current_run_id"] = irun["run_id"]
+                    st.session_state["current_recovery_code"] = icode
+                    art_dir = run_store_instance.get_run_artifacts_dir(irun["run_id"])
+                    zip_path = art_dir / "jobhunt_tailored_batch.zip"
+                    if zip_path.is_file():
+                        st.session_state.zip_bytes = zip_path.read_bytes()
+                    st.success(f"Loaded {len(completed)} jobs into workspace.")
+                    st.rerun()
+                else:
+                    st.info("No completed jobs in this run yet.")
             if st.button("Delete run & artifacts", key="btn_delete_inspected", use_container_width=True):
                 try:
                     run_service.delete_run(irun["run_id"], icode)
@@ -362,6 +415,7 @@ with tab_batch:
         uploaded_file = st.file_uploader(
             "Jobs CSV",
             type=["csv"],
+            disabled=is_running,
             help="Include company, job title and a full description (at least 50 characters).",
         )
         if uploaded_file is not None:
@@ -398,21 +452,30 @@ with tab_batch:
 
     with settings_col:
         with st.container(border=True):
+            st.markdown("##### Batch limits")
+            if is_running:
+                st.markdown('<div class="locked-badge">&#128274; Configuration locked</div>', unsafe_allow_html=True)
             score_threshold = st.slider(
                 "Match threshold (%)",
                 40,
                 90,
-                70,
-                5,
+                value=int(st.session_state.get("score_threshold", 70)),
+                step=5,
+                key="setup_score_threshold",
+                disabled=is_running,
                 help="Generate resumes for jobs at or above this score.",
             )
             max_resumes = st.slider(
                 "Resume limit",
                 1,
                 100,
-                20,
+                value=int(st.session_state.get("max_resumes", 20)),
+                key="setup_max_resumes",
+                disabled=is_running,
                 help="Maximum resume generation attempts per batch.",
             )
+            st.session_state["score_threshold"] = score_threshold
+            st.session_state["max_resumes"] = max_resumes
 
     if parsed_jobs:
         cost = estimate_batch_cost(
@@ -423,7 +486,7 @@ with tab_batch:
             max_resumes=max_resumes,
             expected_shortlist_rate=0.50,
         )
-        budget_label = cost["cost_display"].replace("🎉 ", "")
+        budget_label = cost["cost_display"].replace("🎉", "").strip()
         st.markdown(
             f'<div class="estimate">'
             f'<strong>Estimated budget · {escape(budget_label)}</strong>'
@@ -488,6 +551,7 @@ with tab_batch:
     status_box = st.empty()
 
     if (btn_run or btn_resume) and parsed_jobs is not None:
+        st.session_state["batch_running"] = True
         log_box = st.expander("Execution details", expanded=False)
         results_accumulator = list(checkpoint_completed_jobs) if btn_resume else []
         start_index = checkpoint_resume_index if btn_resume else 0
@@ -495,10 +559,48 @@ with tab_batch:
             session_manager.clear_checkpoint(session_id)
         clear_results()
 
-        # Generate cryptographic recovery code for the run
+        clean_provider = (
+            "gemini"
+            if "gemini" in provider.lower()
+            else ("deepseek" if "deepseek" in provider.lower() else "openai")
+        )
+
+        run_id = f"run_{session_id}"
         plain_recovery_code = generate_recovery_code()
+        try:
+            if run_store_instance.get_run(run_id):
+                run_store_instance.delete_run(run_id)
+            job_inputs = [
+                JobInput(
+                    job_id=compute_stable_job_id(j["company"], j["title"], j["jd_text"]),
+                    company=j["company"],
+                    title=j["title"],
+                    jd_text=j["jd_text"],
+                    location=j.get("location", ""),
+                    url=j.get("url", j.get("apply_url", "")),
+                    raw_row_index=i,
+                )
+                for i, j in enumerate(parsed_jobs)
+            ]
+            run_config = RunConfig(
+                run_id=run_id,
+                provider=clean_provider,
+                model=selected_model,
+                score_threshold=score_threshold,
+                max_resumes=max_resumes,
+                is_gemini_free=is_gemini_free,
+            )
+            created_run_id, plain_recovery_code = run_service.create_run(
+                config=run_config,
+                profile=st.session_state.profile,
+                jobs=job_inputs,
+            )
+            run_id = created_run_id
+        except Exception:
+            pass
+
         st.session_state["current_recovery_code"] = plain_recovery_code
-        st.session_state["current_run_id"] = session_id
+        st.session_state["current_run_id"] = run_id
         st.info(f"Batch Recovery Code: `{plain_recovery_code}` · Save this code to check or resume your run later.")
 
         total_to_process = len(parsed_jobs)
@@ -507,6 +609,7 @@ with tab_batch:
         current_job: Dict[str, Any] = {}
 
         def update_pipeline(stage, company, role, complete=False, failed=False):
+            elapsed = int(time.monotonic() - started)
             st.session_state.pipeline_view = pipeline_html(
                 stage=stage,
                 company=company,
@@ -516,12 +619,12 @@ with tab_batch:
                 complete=complete,
                 failed=failed,
                 rate_limit_note=rate_note,
+                elapsed_seconds=elapsed,
             )
             st.session_state.pipeline_progress = (
                 1.0 if complete else (len(results_accumulator) / total_to_process if total_to_process else 0)
             )
             pipeline_box.markdown(st.session_state.pipeline_view, unsafe_allow_html=True)
-            elapsed = int(time.monotonic() - started)
             progress_bar.progress(
                 st.session_state.pipeline_progress,
                 text=f"{len(results_accumulator)} of {total_to_process} jobs processed · {elapsed}s elapsed",
@@ -536,12 +639,6 @@ with tab_batch:
                 current_stage = "Scoring"
                 update_pipeline(current_stage, job["company"], job["title"])
                 log_box.write(f"Scoring {i + 1}/{total_to_process}: {job['company']} — {job['title']}")
-
-                clean_provider = (
-                    "gemini"
-                    if "gemini" in provider.lower()
-                    else ("deepseek" if "deepseek" in provider.lower() else "openai")
-                )
 
                 scored = run_coro_sync(
                     score_job_async(
@@ -603,6 +700,34 @@ with tab_batch:
                     model=selected_model,
                     provider=provider,
                 )
+                try:
+                    job_res = JobResult(
+                        job_id=job.get("job_id", compute_stable_job_id(job["company"], job["title"], job["jd_text"])),
+                        company=job["company"],
+                        title=job["title"],
+                        url=job.get("url", job.get("apply_url", "")),
+                        location=job.get("location", ""),
+                        raw_row_index=i,
+                        match_score=score,
+                        status=scored["status"],
+                        reason=scored.get("reason", ""),
+                        missing_skills=scored.get("missing_skills", []),
+                        pdf_path=scored.get("pdf_path"),
+                        pdf_filename=scored.get("pdf_filename"),
+                        tailored_resume=scored.get("tailored_resume"),
+                    )
+                    run_store_instance.save_job_result(
+                        run_id=run_id,
+                        result=job_res,
+                        stage=Stage.RENDER if scored.get("pdf_path") else Stage.SCORE,
+                    )
+                    run_store_instance.update_run_status(
+                        run_id=run_id,
+                        status=RunStatus.RUNNING,
+                    )
+                except Exception:
+                    pass
+
                 update_pipeline(None, job["company"], f"Job {i + 1} processed · {display_status(scored)}")
 
             current_stage = "Packaging"
@@ -624,6 +749,15 @@ with tab_batch:
             st.session_state.batch_results = results_accumulator
             st.session_state.zip_bytes = zip_bytes
             st.session_state.summary_csv = summary_csv_str
+
+            try:
+                run_store_instance.update_run_status(
+                    run_id=run_id,
+                    status=RunStatus.COMPLETED,
+                )
+            except Exception:
+                pass
+
             update_pipeline(None, "Your batch is ready", "Review job details and download your files below.", complete=True)
 
             if counts(results_accumulator)["attention"]:
@@ -632,6 +766,15 @@ with tab_batch:
                 status_box.success("Batch finished. Your downloads are ready.")
 
         except Exception as exc:
+            try:
+                run_store_instance.update_run_status(
+                    run_id=run_id,
+                    status=RunStatus.AWAITING_CREDENTIALS if "quota" in str(exc).lower() else RunStatus.FAILED,
+                    completed_count=len(results_accumulator),
+                    verified_resumes_count=tailored_count,
+                )
+            except Exception:
+                pass
             st.session_state.batch_results = results_accumulator or None
             update_pipeline(
                 current_stage,
@@ -640,6 +783,8 @@ with tab_batch:
                 failed=True,
             )
             status_box.error(f"Batch interrupted: {exc}. Completed work is shown below; check the checkpoint before retrying.")
+        finally:
+            st.session_state["batch_running"] = False
 
     # --------------------------------------
     # STAGE 3: RESULTS (Review & Download)
@@ -658,6 +803,79 @@ with tab_batch:
             )),
             unsafe_allow_html=True,
         )
+
+        if c["attention"] > 0:
+            ret_c1, ret_c2 = st.columns([2, 1])
+            with ret_c1:
+                st.warning(f"{c['attention']} job(s) failed or require attention.")
+            with ret_c2:
+                if st.button(f"Retry failed jobs ({c['attention']})", key="btn_retry_failed", use_container_width=True):
+                    clean_provider = (
+                        "gemini"
+                        if "gemini" in provider.lower()
+                        else ("deepseek" if "deepseek" in provider.lower() else "openai")
+                    )
+                    retry_acc = []
+                    t_count = sum(1 for r in results if r.get("pdf_path"))
+                    for r in results:
+                        if result_group(r) == "Needs attention":
+                            try:
+                                scored = run_coro_sync(
+                                    score_job_async(
+                                        job=r,
+                                        profile=st.session_state.profile,
+                                        model=selected_model,
+                                        provider=clean_provider,
+                                        api_keys=api_keys_list,
+                                    )
+                                )
+                                score = scored.get("match_score", 0)
+                                if score >= score_threshold and t_count < max_resumes:
+                                    t_count += 1
+                                    tailored = run_coro_sync(
+                                        tailor_resume_async(
+                                            job=scored,
+                                            profile=st.session_state.profile,
+                                            model=selected_model,
+                                            provider=clean_provider,
+                                            api_keys=api_keys_list,
+                                        )
+                                    )
+                                    scored["tailored_resume"] = tailored
+                                    pdf_path = generate_single_page_pdf(
+                                        tailored_resume=tailored,
+                                        output_dir=resumes_dir,
+                                        job=scored,
+                                    )
+                                    scored["pdf_path"] = pdf_path
+                                    scored["pdf_filename"] = os.path.basename(pdf_path)
+                                    scored["status"] = "Tailored & Verified"
+                                else:
+                                    scored["pdf_path"] = None
+                                    scored["pdf_filename"] = None
+                                    scored["status"] = "Below Threshold" if score < score_threshold else "Cap Reached"
+                                retry_acc.append(scored)
+                            except Exception as re_err:
+                                r["status"] = f"Retry Error: {str(re_err)[:30]}"
+                                retry_acc.append(r)
+                        else:
+                            retry_acc.append(r)
+                    st.session_state.batch_results = retry_acc
+                    s_csv = generate_summary_csv(retry_acc)
+                    s_html = render_summary_html(
+                        results=retry_acc,
+                        candidate_name=c_full_name,
+                        threshold=score_threshold,
+                    )
+                    v_pdfs = [r["pdf_path"] for r in retry_acc if r.get("pdf_path")]
+                    st.session_state.zip_bytes = build_batch_zip_bytes(
+                        pdf_paths=v_pdfs,
+                        summary_csv_str=s_csv,
+                        summary_html_str=s_html,
+                    )
+                    st.session_state.summary_csv = s_csv
+                    st.success("Retry complete.")
+                    st.rerun()
 
         download_cols = st.columns([2, 1])
         with download_cols[0]:
@@ -686,7 +904,7 @@ with tab_batch:
         with filter_col:
             group = st.selectbox(
                 "Show",
-                ["All jobs", "PDF generated", "Skipped", "Needs attention"],
+                ["All jobs", "Tailored & Verified", "Below Threshold", "Failed", "Skipped", "Needs attention"],
                 key="result_group",
             )
 
@@ -787,6 +1005,30 @@ with tab_batch:
                             st.caption("PDF generated · check results not recorded in this view.")
                     elif p_path:
                         st.warning("This PDF is no longer available. It may have expired or been deleted.")
+
+            if st.session_state.get("current_recovery_code"):
+                with st.expander("Batch run controls & recovery code", expanded=False):
+                    st.markdown(f"**Current Recovery Code:** `{st.session_state.get('current_recovery_code')}`")
+                    st.caption("Use this code to verify, inspect, or delete this run in the sidebar or across sessions.")
+                    del_c1, del_c2 = st.columns([1, 1])
+                    with del_c1:
+                        if st.button("Delete run & purge artifacts", key="btn_purge_active_run", use_container_width=True):
+                            c_id = st.session_state.get("current_run_id")
+                            c_code = st.session_state.get("current_recovery_code")
+                            try:
+                                if c_id and c_code:
+                                    run_service.delete_run(c_id, c_code)
+                            except Exception:
+                                pass
+                            session_manager.cleanup_session(session_id)
+                            session_manager.clear_checkpoint(session_id)
+                            clear_results()
+                            st.success("Run purged successfully.")
+                            st.rerun()
+                    with del_c2:
+                        if st.button("Clear results view", key="btn_clear_active_results", use_container_width=True):
+                            clear_results()
+                            st.rerun()
     else:
         st.markdown(
             '<div class="empty-state">Your results will appear here.<br>Upload a jobs CSV and start a batch to get going.</div>',
