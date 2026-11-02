@@ -298,3 +298,49 @@ def render_ats_checklist(audit: Dict[str, Any]) -> str:
         f'<div>{"".join(items_html)}</div>'
         f'</div>'
     )
+
+
+def render_live_log_console(logs: Sequence[str], max_lines: int = 14) -> str:
+    """
+    Renders a unified, dark-terminal live log console for running pipelines.
+    Eliminates UI flicker and layout shift from rapid re-renders.
+    """
+    recent_logs = list(logs[-max_lines:]) if logs else ["Initializing pipeline worker..."]
+    log_rows = []
+    for line in recent_logs:
+        line_str = str(line).strip()
+        line_escaped = escape(line_str)
+        line_lower = line_str.lower()
+
+        color_class = "log-info"
+        if "phase" in line_lower or "complete" in line_lower:
+            color_class = "log-phase"
+        elif "failed" in line_lower or "error" in line_lower or "rejected" in line_lower:
+            color_class = "log-err"
+        elif "pdf" in line_lower or "tailor" in line_lower or "verified" in line_lower:
+            color_class = "log-success"
+        elif "throttl" in line_lower or "cooldown" in line_lower or "rate" in line_lower or "waiting" in line_lower:
+            color_class = "log-warn"
+
+        log_rows.append(
+            f'<div class="live-log-line {color_class}">'
+            f'<span class="log-bullet">&#8250;</span> '
+            f'<span>{line_escaped}</span>'
+            f'</div>'
+        )
+
+    return (
+        f'<div class="live-log-card">'
+        f'<div class="live-log-header">'
+        f'<div class="live-log-controls">'
+        f'<span class="log-dot red"></span>'
+        f'<span class="log-dot yellow"></span>'
+        f'<span class="log-dot green"></span>'
+        f'<span class="live-log-title">Execution Console</span>'
+        f'</div>'
+        f'<span class="live-badge"><span class="pulse-dot"></span> LIVE</span>'
+        f'</div>'
+        f'<div class="live-log-body">{"".join(log_rows)}</div>'
+        f'</div>'
+    )
+

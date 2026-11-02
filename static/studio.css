@@ -659,6 +659,122 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   }
 }
 
+/* Live Execution Log Terminal Console */
+.live-log-card {
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 10px;
+  overflow: hidden;
+  margin-top: 0.85rem;
+  margin-bottom: 0.85rem;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.live-log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.55rem 0.9rem;
+  background: #1e293b;
+  border-bottom: 1px solid #334155;
+}
+
+.live-log-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.log-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.log-dot.red { background: #ef4444; }
+.log-dot.yellow { background: #f59e0b; }
+.log-dot.green { background: #10b981; }
+
+.live-log-title {
+  color: #94a3b8;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  margin-left: 0.4rem;
+  text-transform: uppercase;
+}
+
+.live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  padding: 0.15rem 0.5rem;
+  border-radius: 9999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.pulse-dot {
+  width: 6px;
+  height: 6px;
+  background: #10b981;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.3);
+}
+
+.live-log-body {
+  padding: 0.85rem 1rem;
+  max-height: 240px;
+  min-height: 160px;
+  overflow-y: auto;
+  font-size: 0.8rem;
+  line-height: 1.6;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.live-log-line {
+  color: #cbd5e1;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  word-break: break-word;
+}
+
+.log-bullet {
+  color: #64748b;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.live-log-line.log-phase {
+  color: #60a5fa;
+  font-weight: 600;
+}
+
+.live-log-line.log-success {
+  color: #34d399;
+}
+
+.live-log-line.log-warn {
+  color: #fbbf24;
+}
+
+.live-log-line.log-err {
+  color: #f87171;
+}
+
+.live-log-line.log-info {
+  color: #cbd5e1;
+}
+
 /* Mobile Responsiveness */
 @media (max-width: 768px) {
   [data-testid="stMainBlockContainer"] {

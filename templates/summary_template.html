@@ -3,185 +3,201 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>JobHunt AI Studio — Batch Execution Report</title>
+    <title>JobHunt AI Studio — Shortlisted Applications</title>
     <style>
-        * { box-sizing: border-box; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
             color: #0f172a;
-            margin: 0;
-            padding: 32px;
             background: #f8fafc;
+            padding: 40px 20px;
+            line-height: 1.5;
         }
         .container {
-            max-width: 1100px;
+            max-width: 900px;
             margin: 0 auto;
             background: #ffffff;
             border: 1px solid #e2e8f0;
             border-radius: 12px;
-            padding: 32px;
-            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+            overflow: hidden;
         }
-        header {
-            border-bottom: 2px solid #e2e8f0;
-            padding-bottom: 20px;
-            margin-bottom: 24px;
+        .header {
+            background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%);
+            color: #ffffff;
+            padding: 28px 32px;
         }
-        h1 {
-            color: #1e3a8a;
-            font-size: 24px;
-            margin: 0 0 8px 0;
-        }
-        .meta {
-            color: #64748b;
-            font-size: 14px;
-        }
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 16px;
-            margin-bottom: 32px;
-        }
-        .card {
-            background: #f1f5f9;
-            border: 1px solid #cbd5e1;
-            border-radius: 8px;
-            padding: 16px 20px;
-        }
-        .card .label {
-            font-size: 12px;
-            font-weight: 600;
-            color: #475569;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        .card .value {
-            font-size: 26px;
+        .header h1 {
+            font-size: 22px;
             font-weight: 700;
-            color: #1e3a8a;
-            margin-top: 4px;
+            letter-spacing: -0.02em;
+            margin-bottom: 6px;
+        }
+        .header .meta {
+            font-size: 13px;
+            color: #bfdbfe;
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+        .summary-stats {
+            display: flex;
+            background: #f1f5f9;
+            border-bottom: 1px solid #e2e8f0;
+            padding: 14px 32px;
+            font-size: 13px;
+            color: #475569;
+            font-weight: 600;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .summary-count {
+            background: #dbeafe;
+            color: #1e40af;
+            padding: 3px 10px;
+            border-radius: 9999px;
+            font-size: 12px;
+            font-weight: 700;
+        }
+        .table-wrap {
+            padding: 0;
+            overflow-x: auto;
         }
         table {
             width: 100%;
             border-collapse: collapse;
-            font-size: 13px;
+            font-size: 14px;
+            text-align: left;
         }
-        th {
+        thead th {
             background: #f8fafc;
             color: #334155;
             font-weight: 600;
-            text-align: left;
-            padding: 12px 14px;
-            border-bottom: 2px solid #cbd5e1;
-        }
-        td {
-            padding: 12px 14px;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            padding: 14px 24px;
             border-bottom: 1px solid #e2e8f0;
-            vertical-align: top;
         }
-        tr:hover {
+        tbody tr {
+            border-bottom: 1px solid #f1f5f9;
+            transition: background 120ms ease;
+        }
+        tbody tr:hover {
             background: #f8fafc;
         }
-        .score-pill {
-            display: inline-block;
-            font-weight: 700;
-            padding: 2px 8px;
-            border-radius: 6px;
-            font-size: 12px;
+        tbody td {
+            padding: 16px 24px;
+            vertical-align: middle;
         }
-        .score-high { background: #dcfce7; color: #15803d; }
-        .score-mid { background: #fef9c3; color: #854d0e; }
-        .score-low { background: #fee2e2; color: #b91c1c; }
-
-        .badge-status {
-            display: inline-block;
-            font-size: 11px;
+        .company-col {
             font-weight: 600;
-            padding: 3px 8px;
-            border-radius: 9999px;
+            color: #0f172a;
+            font-size: 14px;
+            width: 32%;
         }
-        .status-tailored { background: #dbeafe; color: #1e40af; }
-        .status-skipped { background: #f1f5f9; color: #64748b; }
-        
-        .pdf-link {
-            color: #1e3a8a;
-            font-weight: 500;
+        .role-col {
+            color: #334155;
+            width: 44%;
+        }
+        .apply-col {
+            width: 24%;
+            text-align: right;
+        }
+        .apply-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: #2563eb;
+            color: #ffffff;
+            font-weight: 600;
+            font-size: 12px;
+            padding: 7px 14px;
+            border-radius: 6px;
             text-decoration: none;
+            transition: background 150ms ease, transform 100ms ease;
         }
-        .pdf-link:hover { text-decoration: underline; }
+        .apply-btn:hover {
+            background: #1d4ed8;
+            transform: translateY(-1px);
+            color: #ffffff;
+        }
+        .no-link {
+            font-size: 12px;
+            color: #94a3b8;
+            font-style: italic;
+        }
+        .empty-state {
+            padding: 48px 32px;
+            text-align: center;
+            color: #64748b;
+        }
+        .footer {
+            padding: 16px 32px;
+            font-size: 12px;
+            color: #94a3b8;
+            border-top: 1px solid #f1f5f9;
+            background: #ffffff;
+            display: flex;
+            justify-content: space-between;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <header>
-            <h1>JobHunt AI Studio &mdash; Batch Run Executive Report</h1>
+        <div class="header">
+            <h1>JobHunt AI Studio &mdash; Shortlisted Applications</h1>
             <div class="meta">
-                Candidate: <strong>{{ candidate_name }}</strong> &bull; Generated: {{ run_date }} &bull; Threshold: &ge;{{ threshold }}%
-            </div>
-        </header>
-
-        <div class="stats-grid">
-            <div class="card">
-                <div class="label">Total Ingested</div>
-                <div class="value">{{ total_jobs }}</div>
-            </div>
-            <div class="card">
-                <div class="label">Resumes Tailored</div>
-                <div class="value" style="color: #15803d;">{{ tailored_count }}</div>
-            </div>
-            <div class="card">
-                <div class="label">Average Match</div>
-                <div class="value">{{ avg_score }}%</div>
-            </div>
-            <div class="card">
-                <div class="label">Score Threshold</div>
-                <div class="value">{{ threshold }}%</div>
+                <span>Candidate: <strong>{{ candidate_name }}</strong></span>
+                <span>&bull;</span>
+                <span>Generated: <strong>{{ run_date }}</strong></span>
             </div>
         </div>
 
-        <table>
-            <thead>
-                <tr>
-                    <th>Company</th>
-                    <th>Job Title</th>
-                    <th>Score</th>
-                    <th>Status</th>
-                    <th>Tailored Resume PDF</th>
-                    <th>Match Reason</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for r in results %}
-                <tr>
-                    <td><strong>{{ r.company }}</strong><br><small style="color: #64748b;">{{ r.location }}</small></td>
-                    <td>
-                        {{ r.title }}
-                        {% if r.url and r.url != 'N/A' %}
-                        <br><a href="{{ r.url }}" target="_blank" style="font-size: 11px; color: #3b82f6;">View Posting &rarr;</a>
-                        {% endif %}
-                    </td>
-                    <td>
-                        <span class="score-pill {% if r.match_score >= 75 %}score-high{% elif r.match_score >= threshold %}score-mid{% else %}score-low{% endif %}">
-                            {{ r.match_score }}%
-                        </span>
-                    </td>
-                    <td>
-                        <span class="badge-status {% if r.pdf_path %}status-tailored{% else %}status-skipped{% endif %}">
-                            {{ r.status }}
-                        </span>
-                    </td>
-                    <td>
-                        {% if r.pdf_path %}
-                            <span class="pdf-link">&#128196; {{ r.pdf_filename }}</span>
-                        {% else %}
-                            <span style="color: #94a3b8;">Below threshold</span>
-                        {% endif %}
-                    </td>
-                    <td style="color: #475569; font-size: 12px;">{{ r.reason }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+        <div class="summary-stats">
+            <span>Shortlisted Jobs for Direct Application</span>
+            <span class="summary-count">{{ results|length }} Jobs</span>
+        </div>
+
+        <div class="table-wrap">
+            {% if results %}
+            <table>
+                <thead>
+                    <tr>
+                        <th class="company-col">Company Name</th>
+                        <th class="role-col">Job Role</th>
+                        <th class="apply-col">Direct Apply Link</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in results %}
+                    <tr>
+                        <td class="company-col">{{ r.company }}</td>
+                        <td class="role-col">{{ r.title }}</td>
+                        <td class="apply-col">
+                            {% if r.url and r.url != 'N/A' %}
+                            <a href="{{ r.url }}" target="_blank" rel="noopener noreferrer" class="apply-btn">
+                                Apply Now &rarr;
+                            </a>
+                            {% else %}
+                            <span class="no-link">No link provided</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="empty-state">
+                <p>No jobs were shortlisted or tailored in this run.</p>
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="footer">
+            <span>Generated by JobHunt AI Studio</span>
+            <span>All resumes tailored & ATS-verified</span>
+        </div>
     </div>
 </body>
 </html>

@@ -56,6 +56,7 @@ from ui import (
     pipeline_html,
     render_ats_checklist,
     render_health_card,
+    render_live_log_console,
     result_group,
     section,
     styles,
@@ -883,47 +884,63 @@ with tab_batch:
     # Active Background Execution Rendering (Survives client closing tab/phone)
     if batch_runner.is_running(session_id):
         run_st = batch_runner.get_run_state(session_id)
-        phase_str = run_st.get("phase", "scoring").title()
+        phase_raw = run_st.get("phase", "scoring")
+        phase_str = phase_raw.title()
         completed = run_st.get("completed_count", 0)
         total = run_st.get("total_jobs", len(parsed_jobs) if parsed_jobs else 1)
         curr = run_st.get("current_job") or {}
-
-        status_box.info(
-            f"🚀 **Background batch running on server** · **Phase:** {phase_str} · **Progress:** {completed}/{total} jobs processed.\n\n"
-            f"ℹ️ *You can safely close this browser tab, shut down your laptop, or turn off your phone.* "
-            f"The server continues processing in the background and saves your work to disk. When you return, your progress will be waiting here."
-        )
+        interim_results = run_st.get("results") or []
+        start_ts = run_st.get("start_time")
+        elapsed_sec = int(time.time() - start_ts) if start_ts else None
 
         curr_company = curr.get("company", "Evaluating")
         curr_role = curr.get("title", "Job Description")
         curr_stage = curr.get("stage", phase_str)
 
-        progress_val = min(1.0, max(0.0, completed / max(1, total)))
+        status_box.info(
+            f"🚀 **Background batch running on server** · **Phase:** {phase_str} · **Evaluating:** {curr_company} — *{curr_role}*\n\n"
+            f"ℹ️ *You can safely close this browser or turn off your device.* "
+            f"Processing continues in the background on the server and saves every step to disk. When you return, your results will be ready here."
+        )
+
         pipeline_box.markdown(
             pipeline_html(
                 stage=curr_stage,
                 company=curr_company,
                 role=curr_role,
-                results=[],
+                results=interim_results,
                 total=total,
                 rate_limit_note=rate_note,
+                elapsed_seconds=elapsed_sec,
             ),
             unsafe_allow_html=True,
         )
-        progress_bar.progress(progress_val, text=f"{phase_str}: {completed} of {total} jobs processed")
 
-        c_stop, _ = st.columns([2, 3])
+        if phase_raw == "tailoring":
+            t_curr = run_st.get("tailoring_current", 0)
+            t_total = run_st.get("tailoring_total", max(1, run_st.get("qualified_count", 1)))
+            t_progress = min(1.0, max(0.0, t_curr / max(1, t_total)))
+            progress_bar.progress(
+                t_progress,
+                text=f"Phase 2 of 2: Tailoring resumes · {t_curr} of {t_total} shortlisted resumes ({int(t_progress * 100)}%)",
+            )
+        else:
+            progress_val = min(1.0, max(0.0, completed / max(1, total)))
+            progress_bar.progress(
+                progress_val,
+                text=f"Phase 1 of 2: Scoring jobs · {completed} of {total} evaluated ({int(progress_val * 100)}%)",
+            )
+
+        c_stop, _ = st.columns([1, 2])
         with c_stop:
-            if st.button("Pause / Stop background batch", type="secondary", use_container_width=True):
+            if st.button("⏸️ Pause / Stop background batch", key="btn_stop_batch", use_container_width=True):
                 batch_runner.stop_batch(session_id)
                 st.toast("Paused batch.", icon="⏸️")
                 st.rerun()
 
         logs = run_st.get("logs", [])
         if logs:
-            with st.expander("Execution details", expanded=True):
-                for l in logs[-15:]:
-                    st.write(l)
+            st.markdown(render_live_log_console(logs=logs, max_lines=12), unsafe_allow_html=True)
 
         # Smooth auto-refresh loop for live clients
         time.sleep(2)
@@ -1020,7 +1037,7 @@ with tab_batch:
                     st.success("Retry complete.")
                     st.rerun()
 
-        download_cols = st.columns([2, 1])
+        download_cols = st.columns([2, 1, 1])
         with download_cols[0]:
             if st.session_state.zip_bytes:
                 st.download_button(
@@ -1040,6 +1057,19 @@ with tab_batch:
                     mime="text/csv",
                     use_container_width=True,
                 )
+        with download_cols[2]:
+            s_html = render_summary_html(
+                results=st.session_state.batch_results,
+                candidate_name=c_full_name,
+                threshold=score_threshold,
+            )
+            st.download_button(
+                "Download HTML Report",
+                s_html,
+                file_name="shortlisted_jobs_report.html",
+                mime="text/html",
+                use_container_width=True,
+            )
 
         search_col, filter_col = st.columns([2, 1])
         with search_col:

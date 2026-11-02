@@ -66,10 +66,16 @@ def render_summary_html(
     candidate_name: str = "Candidate",
     threshold: int = 70,
 ) -> str:
-    """Generates an HTML summary table report with strict autoescaping and safe URLs."""
+    """
+    Generates a clean HTML summary table report containing ONLY shortlisted jobs where a
+    tailored resume was created, with clean columns: Company Name, Job Role, and Direct Apply Link.
+    """
+    # Filter strictly to shortlisted jobs with tailored resumes
+    shortlisted = [r for r in results if r.get("pdf_path")]
+    target_results = shortlisted if shortlisted else results
+
     total_jobs = len(results)
-    tailored_jobs = [r for r in results if r.get("pdf_path")]
-    tailored_count = len(tailored_jobs)
+    tailored_count = len(shortlisted) if shortlisted else len(results)
     avg_score = (
         round(sum(r.get("match_score", 0) for r in results) / total_jobs, 1)
         if total_jobs > 0 else 0
@@ -77,7 +83,7 @@ def render_summary_html(
 
     # Sanitize URLs before rendering
     clean_results = []
-    for r in results:
+    for r in target_results:
         r_copy = dict(r)
         url_val = r_copy.get("url")
         r_copy["url"] = url_val if is_safe_url(url_val) else ""
@@ -105,10 +111,10 @@ def render_summary_html(
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Batch Execution Summary</title>
+    <title>Shortlisted Applications Report</title>
 </head>
 <body>
-    <h1>JobHunt AI Studio — Batch Run Report</h1>
+    <h1>JobHunt AI Studio — Shortlisted Applications</h1>
     <p>Candidate: {candidate_name} | Total Jobs: {total_jobs} | Tailored: {tailored_count}</p>
 </body>
 </html>"""

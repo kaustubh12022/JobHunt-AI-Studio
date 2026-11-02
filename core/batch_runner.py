@@ -319,6 +319,7 @@ class BatchRunner:
                     "current_job": current_job_info,
                     "qualified_count": sum(1 for r in results_map.values() if r.get("match_score", 0) >= score_threshold),
                     "tailored_count": 0,
+                    "results": list(results_map.values()),
                     "logs": logs,
                     "start_time": start_time,
                 })
@@ -378,7 +379,10 @@ class BatchRunner:
                     "total_jobs": total_jobs,
                     "current_job": current_job_info,
                     "qualified_count": len(qualified_indices),
+                    "tailoring_current": t_idx + 1,
+                    "tailoring_total": len(target_indices),
                     "tailored_count": sum(1 for r in results_map.values() if r.get("pdf_path")),
+                    "results": list(results_map.values()),
                     "logs": logs,
                     "start_time": start_time,
                 })
@@ -435,6 +439,20 @@ class BatchRunner:
                     model=model,
                     provider=provider,
                 )
+                self._save_state(session_id, {
+                    "status": "running",
+                    "phase": "tailoring",
+                    "completed_count": total_jobs,
+                    "total_jobs": total_jobs,
+                    "current_job": current_job_info,
+                    "qualified_count": len(qualified_indices),
+                    "tailoring_current": t_idx + 1,
+                    "tailoring_total": len(target_indices),
+                    "tailored_count": sum(1 for r in results_map.values() if r.get("pdf_path")),
+                    "results": list(results_map.values()),
+                    "logs": logs,
+                    "start_time": start_time,
+                })
 
             # Mark statuses for below-threshold or cap-reached jobs
             for i in range(total_jobs):
