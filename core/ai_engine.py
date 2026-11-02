@@ -46,8 +46,8 @@ def extract_json_str(raw: str) -> str:
 class GeminiProjectLimiter:
     """
     Project-level rate limiter for Google Gemini API:
-    - Enforces configured RPM across all requests.
-    - Preserves project-level quota: multiple keys do not multiply project rate limit.
+    - Enforces configured RPM across all requests for a specific key/project.
+    - Preserves project-level quota (15 RPM free tier).
     - Honors full cooldown duration upon 429 / ResourceExhausted errors.
     """
 
@@ -56,6 +56,18 @@ class GeminiProjectLimiter:
         self._lock = asyncio.Lock()
         self._call_timestamps: List[float] = []
         self._cooldown_until: float = 0.0
+
+    def get_wait_time(self) -> float:
+        """Returns the seconds until this limiter can accept a call."""
+        now = time.time()
+        cooldown_wait = max(0.0, self._cooldown_until - now)
+        valid_ts = [t for t in self._call_timestamps if now - t < 60.0]
+        if len(valid_ts) >= self.rpm_limit:
+            earliest = valid_ts[0]
+            rpm_wait = max(0.0, 60.0 - (now - earliest) + 0.1)
+        else:
+            rpm_wait = 0.0
+        return max(cooldown_wait, rpm_wait)
 
     async def acquire_slot(self):
         async with self._lock:
@@ -87,27 +99,40 @@ class GeminiProjectLimiter:
 
 class GeminiKeyPool:
     """
-    Manages user-provided Gemini keys with project-level throttling,
-    safe masking, and rotation across available keys.
+    Manages user-provided Gemini keys with independent per-key rate limiting,
+    safe masking, and true multi-project throughput scaling.
     """
 
     def __init__(self, keys: Optional[List[str]] = None, rpm_limit: int = 15):
         self._keys: List[str] = [k.strip() for k in keys if k and k.strip()] if keys else []
+        self._rpm_limit: int = rpm_limit
+        self._limiters: Dict[str, GeminiProjectLimiter] = {}
         self._index: int = 0
-        self.limiter = GeminiProjectLimiter(rpm_limit=rpm_limit)
         self.stats: Dict[str, Dict[str, int]] = {}
-        self._setup_stats()
+        self._setup_limiters_and_stats()
 
-    def _setup_stats(self):
+    def _setup_limiters_and_stats(self):
         for k in self._keys:
+            if k not in self._limiters:
+                self._limiters[k] = GeminiProjectLimiter(rpm_limit=self._rpm_limit)
             mask = self.get_mask(k)
             if mask not in self.stats:
                 self.stats[mask] = {"calls": 0, "success": 0, "rate_limits": 0, "errors": 0}
 
+    @property
+    def limiter(self) -> GeminiProjectLimiter:
+        """Backwards compatibility for tests and inspections."""
+        if self._keys and self._keys[0] in self._limiters:
+            return self._limiters[self._keys[0]]
+        return GeminiProjectLimiter(rpm_limit=self._rpm_limit)
+
     def update_keys(self, keys: List[str], rpm_limit: int = 15):
         self._keys = [k.strip() for k in keys if k and k.strip()]
-        self.limiter.rpm_limit = rpm_limit
-        self._setup_stats()
+        self._rpm_limit = rpm_limit
+        for k in self._keys:
+            if k in self._limiters:
+                self._limiters[k].rpm_limit = rpm_limit
+        self._setup_limiters_and_stats()
 
     def get_keys(self) -> List[str]:
         return self._keys
@@ -121,22 +146,40 @@ class GeminiKeyPool:
         if not self._keys:
             raise ValueError("No Gemini API keys configured. Please provide your Gemini API key.")
 
-        await self.limiter.acquire_slot()
-
+        # Find the key with the shortest wait time
+        # If multiple keys have 0 wait time, advance in round-robin order
         n = len(self._keys)
-        cand_key = self._keys[self._index % n]
-        self._index = (self._index + 1) % n
+        best_key = None
+        min_wait = float("inf")
 
-        mask = self.get_mask(cand_key)
+        for i in range(n):
+            cand_key = self._keys[(self._index + i) % n]
+            limiter = self._limiters[cand_key]
+            wait = limiter.get_wait_time()
+            if wait < min_wait:
+                min_wait = wait
+                best_key = cand_key
+                if wait == 0.0:
+                    self._index = (self._index + i + 1) % n
+                    break
+
+        if not best_key:
+            best_key = self._keys[self._index % n]
+            self._index = (self._index + 1) % n
+
+        target_limiter = self._limiters[best_key]
+        await target_limiter.acquire_slot()
+
+        mask = self.get_mask(best_key)
         if mask in self.stats:
             self.stats[mask]["calls"] += 1
 
         client = AsyncOpenAI(
-            api_key=cand_key,
+            api_key=best_key,
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
             timeout=45.0,
         )
-        return client, cand_key, mask
+        return client, best_key, mask
 
     def record_success(self, key: str):
         mask = self.get_mask(key)
@@ -147,7 +190,8 @@ class GeminiKeyPool:
         mask = self.get_mask(key)
         if mask in self.stats:
             self.stats[mask]["rate_limits"] += 1
-        self.limiter.trigger_cooldown(cooldown_seconds)
+        if key in self._limiters:
+            self._limiters[key].trigger_cooldown(cooldown_seconds)
 
     def record_error(self, key: str, error_msg: str):
         mask = self.get_mask(key)

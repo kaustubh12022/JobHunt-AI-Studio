@@ -142,3 +142,33 @@ def test_scoped_client_credential_isolation():
     # Global environment must remain untouched
     assert os.environ.get("OPENAI_API_KEY") == initial_openai
     assert os.environ.get("DEEPSEEK_API_KEY") == initial_deepseek
+
+
+def test_gemini_key_pool_multi_project_rotation_and_isolated_cooldown():
+    """Verify that GeminiKeyPool gives each key an independent rate limiter and isolated cooldown."""
+    import asyncio
+    from core.ai_engine import GeminiKeyPool
+
+    pool = GeminiKeyPool(keys=["key_proj_alpha_12345", "key_proj_beta_67890"], rpm_limit=15)
+    assert len(pool.get_keys()) == 2
+
+    # First acquisition gets first key
+    _, key1, mask1 = asyncio.run(pool.acquire_client())
+    assert key1 == "key_proj_alpha_12345"
+
+    # Second acquisition immediately gets second key (round robin with 0 wait)
+    _, key2, mask2 = asyncio.run(pool.acquire_client())
+    assert key2 == "key_proj_beta_67890"
+
+    # Now rate limit key 1
+    pool.record_rate_limit("key_proj_alpha_12345", cooldown_seconds=60.0)
+
+    # Next acquisition MUST select key 2 because key 1 is on cooldown
+    _, key3, _ = asyncio.run(pool.acquire_client())
+    assert key3 == "key_proj_beta_67890"
+
+    # Stats tracked per key
+    assert pool.stats[mask1]["calls"] == 1
+    assert pool.stats[mask1]["rate_limits"] == 1
+    assert pool.stats[mask2]["calls"] == 2
+    assert pool.stats[mask2]["rate_limits"] == 0

@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import time
 import uuid
+
+logger = logging.getLogger("JobHuntAIStudio")
 from html import escape
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -13,8 +16,9 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 import streamlit as st
 
-from core.ai_engine import ai_engine_instance
+from core.ai_engine import ScopedAIClient, ai_engine_instance
 from core.ats_verifier import audit_resume_pdf
+from core.batch_runner import batch_runner
 from core.browser_storage import sync_browser_storage
 from core.cost_estimator import estimate_batch_cost
 from core.csv_parser import generate_sample_csv_str, parse_jobs_csv
@@ -119,7 +123,12 @@ except Exception:
     pass
 
 if "session_id" not in st.session_state:
-    st.session_state.session_id = uuid.uuid4().hex[:12]
+    qp_id = st.query_params.get("session_id")
+    if qp_id and len(qp_id) >= 6:
+        st.session_state.session_id = qp_id
+    else:
+        st.session_state.session_id = uuid.uuid4().hex[:12]
+st.query_params["session_id"] = st.session_state.session_id
 session_id = st.session_state.session_id
 session_dir = session_manager.get_session_dir(session_id)
 resumes_dir = session_manager.get_resumes_dir(session_id)
@@ -131,8 +140,24 @@ if "profile_editor_pending" in st.session_state:
 for key in ("batch_results", "zip_bytes"):
     st.session_state.setdefault(key, None)
 
-# Track whether a batch run is in progress to enforce config immutability
-is_running = bool(st.session_state.get("batch_running", False))
+# Check background execution state from server
+active_run_state = batch_runner.get_run_state(session_id)
+is_batch_active = batch_runner.is_running(session_id)
+is_running = is_batch_active or bool(st.session_state.get("batch_running", False))
+
+if active_run_state.get("status") == "completed" and not st.session_state.get("batch_results"):
+    st.session_state.batch_results = active_run_state.get("results")
+    st.session_state.summary_csv = active_run_state.get("summary_csv")
+    z_path = active_run_state.get("zip_path")
+    if z_path and os.path.exists(z_path):
+        with open(z_path, "rb") as f:
+            st.session_state.zip_bytes = f.read()
+    st.session_state.pipeline_progress = 1.0
+    st.session_state.pipeline_view = pipeline_html(
+        results=st.session_state.batch_results,
+        total=len(st.session_state.batch_results),
+        complete=True,
+    )
 
 # ------------------------------------------
 # OPTION A: Browser Local Storage Sync
@@ -159,8 +184,8 @@ if saved_device_data and not st.session_state.get("device_data_synced", False):
             apply_profile(stored_prof)
             st.session_state.profile_editor = profile_to_yaml_str(stored_prof)
             st.session_state["profile_notice"] = "Restored saved profile & credentials from this device."
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Error creating run: {e}")
     st.session_state["device_data_synced"] = True
 
 # ==========================================
@@ -225,7 +250,6 @@ with st.sidebar:
                 disabled=is_running,
             )
             api_keys_list = [single_key.strip().strip("'\"`")] if single_key.strip().strip("'\"`") else []
-        ai_engine_instance.configure_keys(provider="gemini", gemini_keys=api_keys_list, gemini_rpm=gemini_rpm)
     elif provider == "DeepSeek":
         with st.expander("Model settings"):
             selected_model = st.selectbox("DeepSeek Model", ["deepseek-chat", "deepseek-reasoner"], disabled=is_running)
@@ -234,7 +258,6 @@ with st.sidebar:
             default_ds = os.environ.get("DEEPSEEK_API_KEY", "")
         ds_key = st.text_input("DeepSeek API Key", value=default_ds, type="password", disabled=is_running)
         api_keys_list = [ds_key.strip().strip("'\"`")] if ds_key.strip().strip("'\"`") else []
-        ai_engine_instance.configure_keys(provider="deepseek", deepseek_key=ds_key)
     else:
         with st.expander("Model settings"):
             selected_model = st.selectbox("OpenAI Model", ["gpt-4o-mini", "gpt-4o"], disabled=is_running)
@@ -243,7 +266,24 @@ with st.sidebar:
             default_oa = os.environ.get("OPENAI_API_KEY", "")
         oa_key = st.text_input("OpenAI API Key", value=default_oa, type="password", disabled=is_running)
         api_keys_list = [oa_key.strip().strip("'\"`")] if oa_key.strip().strip("'\"`") else []
-        ai_engine_instance.configure_keys(provider="openai", openai_key=oa_key)
+
+    clean_provider = (
+        "gemini"
+        if "gemini" in provider.lower()
+        else ("deepseek" if "deepseek" in provider.lower() else "openai")
+    )
+    if api_keys_list:
+        try:
+            st.session_state.ai_client = ScopedAIClient(
+                provider=clean_provider,
+                api_keys=api_keys_list,
+                model=selected_model,
+                rpm_limit=15 if is_gemini_free else gemini_rpm,
+            )
+        except Exception:
+            st.session_state.ai_client = None
+    else:
+        st.session_state.ai_client = None
 
     st.caption(f"{len(api_keys_list)} key(s) entered · {selected_model}" if api_keys_list else "Add an API key to enable your batch.")
 
@@ -678,6 +718,7 @@ with tab_batch:
             )
     with actions[-1]:
         if st.button("Clear results", use_container_width=True):
+            batch_runner.clear_batch(session_id)
             session_manager.clear_checkpoint(session_id)
             clear_results()
             st.rerun()
@@ -703,13 +744,8 @@ with tab_batch:
 
     if (btn_run or btn_resume) and parsed_jobs is not None:
         st.session_state["batch_running"] = True
-        status_box.info(f"Batch running: evaluating {len(parsed_jobs)} jobs in real time below...")
+        status_box.info(f"Starting batch evaluation for {len(parsed_jobs)} jobs in background...")
         st.toast(f"Starting batch evaluation for {len(parsed_jobs)} jobs...", icon="🚀")
-        log_box = st.expander("Execution details", expanded=True)
-        results_accumulator = list(checkpoint_completed_jobs) if btn_resume else []
-        start_index = checkpoint_resume_index if btn_resume else 0
-        if not btn_resume:
-            session_manager.clear_checkpoint(session_id)
         clear_results()
 
         clean_provider = (
@@ -723,6 +759,12 @@ with tab_batch:
         try:
             if run_store_instance.get_run(run_id):
                 run_store_instance.delete_run(run_id)
+            if run_store_instance.get_queued_runs_count() >= 10:
+                with run_store_instance._get_connection() as conn:
+                    conn.execute(
+                        "UPDATE runs SET status = ? WHERE status IN (?, ?)",
+                        (RunStatus.CANCELLED.value, RunStatus.PENDING.value, RunStatus.AWAITING_CREDENTIALS.value),
+                    )
             job_inputs = [
                 JobInput(
                     job_id=compute_stable_job_id(j["company"], j["title"], j["jd_text"]),
@@ -749,195 +791,143 @@ with tab_batch:
                 jobs=job_inputs,
             )
             run_id = created_run_id
-        except Exception:
-            pass
+            run_store_instance.update_run_status(run_id, RunStatus.RUNNING)
+        except Exception as e:
+            logger.error(f"Error creating run: {e}")
 
         st.session_state["current_recovery_code"] = plain_recovery_code
         st.session_state["current_run_id"] = run_id
-        st.info(f"Batch Recovery Code: `{plain_recovery_code}` · Save this code to check or resume your run later.")
 
-        total_to_process = len(parsed_jobs)
-        started = time.monotonic()
-        current_stage = "Scoring"
-        current_job: Dict[str, Any] = {}
+        is_test_env = bool(os.environ.get("PYTEST_CURRENT_TEST"))
 
-        def update_pipeline(stage, company, role, complete=False, failed=False):
-            elapsed = int(time.monotonic() - started)
+        def ui_update_cb(stage, company, role, complete=False, failed=False):
             st.session_state.pipeline_view = pipeline_html(
                 stage=stage,
                 company=company,
                 role=role,
-                results=results_accumulator,
-                total=total_to_process,
+                results=st.session_state.get("batch_results") or [],
+                total=len(parsed_jobs),
                 complete=complete,
                 failed=failed,
                 rate_limit_note=rate_note,
-                elapsed_seconds=elapsed,
             )
-            st.session_state.pipeline_progress = (
-                1.0 if complete else (len(results_accumulator) / total_to_process if total_to_process else 0)
-            )
-            pipeline_box.markdown(st.session_state.pipeline_view, unsafe_allow_html=True)
-            progress_bar.progress(
-                st.session_state.pipeline_progress,
-                text=f"{len(results_accumulator)} of {total_to_process} jobs processed · {elapsed}s elapsed",
-            )
+            if complete:
+                st.session_state.pipeline_progress = 1.0
 
-        tailored_count = sum(1 for r in results_accumulator if r.get("pdf_path"))
+        batch_runner.start_batch(
+            session_id=session_id,
+            jobs=parsed_jobs,
+            profile=st.session_state.profile,
+            provider=clean_provider,
+            api_keys=api_keys_list,
+            model=selected_model,
+            score_threshold=score_threshold,
+            max_resumes=max_resumes,
+            is_gemini_free=is_gemini_free,
+            gemini_rpm=gemini_rpm,
+            resume_from_checkpoint=btn_resume,
+            wait_until_complete=is_test_env,
+            on_pipeline_update=ui_update_cb if is_test_env else None,
+        )
 
-        try:
-            for i in range(start_index, total_to_process):
-                job = parsed_jobs[i]
-                current_job = job
-                current_stage = "Scoring"
-                update_pipeline(current_stage, job["company"], job["title"])
-                log_box.write(f"Scoring {i + 1}/{total_to_process}: {job['company']} — {job['title']}")
-
-                scored = run_coro_sync(
-                    score_job_async(
-                        job=job,
-                        profile=st.session_state.profile,
-                        model=selected_model,
-                        provider=clean_provider,
-                        api_keys=api_keys_list,
-                    )
-                )
-                score = scored.get("match_score", 0)
-
-                if score >= score_threshold and tailored_count < max_resumes:
-                    tailored_count += 1
-                    current_stage = "Tailoring"
-                    update_pipeline(current_stage, job["company"], job["title"])
-                    log_box.write(f"Tailoring: {job['company']} · match {score}%")
-
-                    tailored_resume = run_coro_sync(
-                        tailor_resume_async(
-                            job=scored,
-                            profile=st.session_state.profile,
-                            model=selected_model,
-                            provider=clean_provider,
-                            api_keys=api_keys_list,
-                        )
-                    )
-                    scored["tailored_resume"] = tailored_resume
-
-                    current_stage = "PDF generation"
-                    update_pipeline(current_stage, job["company"], job["title"])
-                    try:
-                        pdf_path = generate_single_page_pdf(
-                            tailored_resume=tailored_resume,
-                            output_dir=resumes_dir,
-                            job=scored,
-                        )
-                        scored["pdf_path"] = pdf_path
-                        scored["pdf_filename"] = os.path.basename(pdf_path)
-                        scored["status"] = "Tailored & Verified"
-                        log_box.write(f"PDF saved: {os.path.basename(pdf_path)}")
-                    except Exception as exc:
-                        scored["pdf_path"] = None
-                        scored["pdf_filename"] = None
-                        scored["status"] = f"Render Error: {str(exc)[:30]}"
-                        log_box.error(f"PDF generation failed for {job['company']}: {exc}")
-                else:
-                    scored["pdf_path"] = None
-                    scored["pdf_filename"] = None
-                    scored["status"] = "Below Threshold" if score < score_threshold else "Cap Reached"
-                    log_box.write(f"Skipped: {job['company']} · {scored['status']}")
-
-                results_accumulator.append(scored)
-                session_manager.save_checkpoint(
-                    session_id=session_id,
-                    total_jobs=total_to_process,
-                    completed_jobs=results_accumulator,
-                    threshold=score_threshold,
-                    model=selected_model,
-                    provider=provider,
+        if is_test_env:
+            res_state = batch_runner.get_run_state(session_id)
+            if res_state.get("status") == "completed":
+                st.session_state.batch_results = res_state.get("results")
+                st.session_state.summary_csv = res_state.get("summary_csv")
+                z_path = res_state.get("zip_path")
+                if z_path and os.path.exists(z_path):
+                    with open(z_path, "rb") as f:
+                        st.session_state.zip_bytes = f.read()
+                st.session_state.pipeline_progress = 1.0
+                st.session_state.pipeline_view = pipeline_html(
+                    results=st.session_state.batch_results,
+                    total=len(st.session_state.batch_results),
+                    complete=True,
                 )
                 try:
-                    job_res = JobResult(
-                        job_id=job.get("job_id", compute_stable_job_id(job["company"], job["title"], job["jd_text"])),
-                        company=job["company"],
-                        title=job["title"],
-                        url=job.get("url", job.get("apply_url", "")),
-                        location=job.get("location", ""),
-                        raw_row_index=i,
-                        match_score=score,
-                        status=scored["status"],
-                        reason=scored.get("reason", ""),
-                        missing_skills=scored.get("missing_skills", []),
-                        pdf_path=scored.get("pdf_path"),
-                        pdf_filename=scored.get("pdf_filename"),
-                        tailored_resume=scored.get("tailored_resume"),
-                    )
-                    run_store_instance.save_job_result(
-                        run_id=run_id,
-                        result=job_res,
-                        stage=Stage.RENDER if scored.get("pdf_path") else Stage.SCORE,
-                    )
-                    run_store_instance.update_run_status(
-                        run_id=run_id,
-                        status=RunStatus.RUNNING,
-                    )
+                    run_store_instance.update_run_status(run_id, RunStatus.COMPLETED)
+                    for r in st.session_state.batch_results:
+                        j_res = JobResult(
+                            job_id=r.get("job_id", compute_stable_job_id(r["company"], r["title"], r.get("jd_text", ""))),
+                            company=r["company"],
+                            title=r["title"],
+                            match_score=r.get("match_score", 0),
+                            status=r.get("status", "Evaluated"),
+                            pdf_path=r.get("pdf_path"),
+                            scoring_status=r.get("scoring_status", "success"),
+                            audit_result=r.get("audit_result"),
+                        )
+                        run_store_instance.save_job_result(run_id, j_res, Stage.RENDER if r.get("pdf_path") else Stage.SCORE)
                 except Exception:
                     pass
-
-                update_pipeline(None, job["company"], f"Job {i + 1} processed · {display_status(scored)}")
-
-            current_stage = "Packaging"
-            update_pipeline(current_stage, "Preparing your downloads", "Building the CSV summary, HTML report and ZIP bundle.")
-            summary_csv_str = generate_summary_csv(results_accumulator)
-            summary_html_str = render_summary_html(
-                results=results_accumulator,
-                candidate_name=c_full_name,
-                threshold=score_threshold,
-            )
-            all_pdf_paths = [r["pdf_path"] for r in results_accumulator if r.get("pdf_path")]
-            zip_bytes = build_batch_zip_bytes(
-                pdf_paths=all_pdf_paths,
-                summary_csv_str=summary_csv_str,
-                summary_html_str=summary_html_str,
-            )
-
-            session_manager.clear_checkpoint(session_id)
-            st.session_state.batch_results = results_accumulator
-            st.session_state.zip_bytes = zip_bytes
-            st.session_state.summary_csv = summary_csv_str
-
-            try:
-                run_store_instance.update_run_status(
-                    run_id=run_id,
-                    status=RunStatus.COMPLETED,
+                if counts(st.session_state.batch_results)["attention"]:
+                    status_box.warning("Batch finished with jobs needing attention. Review their details below.")
+                else:
+                    status_box.success("Batch finished. Your downloads are ready.")
+            elif res_state.get("status") == "failed":
+                st.session_state.batch_results = res_state.get("results") or None
+                st.session_state.pipeline_view = pipeline_html(
+                    stage="Scoring",
+                    company="Batch interrupted",
+                    role="Processing stopped",
+                    results=st.session_state.batch_results or [],
+                    total=len(parsed_jobs),
+                    failed=True,
                 )
-            except Exception:
-                pass
-
-            update_pipeline(None, "Your batch is ready", "Review job details and download your files below.", complete=True)
-
-            if counts(results_accumulator)["attention"]:
-                status_box.warning("Batch finished with jobs needing attention. Review their details below.")
-            else:
-                status_box.success("Batch finished. Your downloads are ready.")
-
-        except Exception as exc:
-            try:
-                run_store_instance.update_run_status(
-                    run_id=run_id,
-                    status=RunStatus.AWAITING_CREDENTIALS if "quota" in str(exc).lower() else RunStatus.FAILED,
-                    completed_count=len(results_accumulator),
-                    verified_resumes_count=tailored_count,
-                )
-            except Exception:
-                pass
-            st.session_state.batch_results = results_accumulator or None
-            update_pipeline(
-                current_stage,
-                current_job.get("company", "Batch interrupted"),
-                "Processing stopped. See the error below.",
-                failed=True,
-            )
-            status_box.error(f"Batch interrupted: {exc}. Completed work is shown below; check the checkpoint before retrying.")
-        finally:
+                status_box.error(f"Batch interrupted: {res_state.get('error')}. Completed work is shown below; check the checkpoint before retrying.")
             st.session_state["batch_running"] = False
+        else:
+            st.rerun()
+
+    # Active Background Execution Rendering (Survives client closing tab/phone)
+    if batch_runner.is_running(session_id):
+        run_st = batch_runner.get_run_state(session_id)
+        phase_str = run_st.get("phase", "scoring").title()
+        completed = run_st.get("completed_count", 0)
+        total = run_st.get("total_jobs", len(parsed_jobs) if parsed_jobs else 1)
+        curr = run_st.get("current_job") or {}
+
+        status_box.info(
+            f"🚀 **Background batch running on server** · **Phase:** {phase_str} · **Progress:** {completed}/{total} jobs processed.\n\n"
+            f"ℹ️ *You can safely close this browser tab, shut down your laptop, or turn off your phone.* "
+            f"The server continues processing in the background and saves your work to disk. When you return, your progress will be waiting here."
+        )
+
+        curr_company = curr.get("company", "Evaluating")
+        curr_role = curr.get("title", "Job Description")
+        curr_stage = curr.get("stage", phase_str)
+
+        progress_val = min(1.0, max(0.0, completed / max(1, total)))
+        pipeline_box.markdown(
+            pipeline_html(
+                stage=curr_stage,
+                company=curr_company,
+                role=curr_role,
+                results=[],
+                total=total,
+                rate_limit_note=rate_note,
+            ),
+            unsafe_allow_html=True,
+        )
+        progress_bar.progress(progress_val, text=f"{phase_str}: {completed} of {total} jobs processed")
+
+        c_stop, _ = st.columns([2, 3])
+        with c_stop:
+            if st.button("Pause / Stop background batch", type="secondary", use_container_width=True):
+                batch_runner.stop_batch(session_id)
+                st.toast("Paused batch.", icon="⏸️")
+                st.rerun()
+
+        logs = run_st.get("logs", [])
+        if logs:
+            with st.expander("Execution details", expanded=True):
+                for l in logs[-15:]:
+                    st.write(l)
+
+        # Smooth auto-refresh loop for live clients
+        time.sleep(2)
+        st.rerun()
 
     # --------------------------------------
     # STAGE 3: RESULTS (Review & Download)
@@ -1175,11 +1165,14 @@ with tab_batch:
                                 pass
                             session_manager.cleanup_session(session_id)
                             session_manager.clear_checkpoint(session_id)
+                            batch_runner.clear_batch(session_id)
                             clear_results()
                             st.success("Run purged successfully.")
                             st.rerun()
                     with del_c2:
                         if st.button("Clear results view", key="btn_clear_active_results", use_container_width=True):
+                            batch_runner.clear_batch(session_id)
+                            session_manager.clear_checkpoint(session_id)
                             clear_results()
                             st.rerun()
     else:
