@@ -233,6 +233,17 @@ class ScopedAIClient:
 
             except Exception as e:
                 err_str = str(e).lower()
+                is_invalid_key = (
+                    "please pass a valid api key" in err_str
+                    or "api_key_invalid" in err_str
+                    or "invalid api key" in err_str
+                    or ("invalid_argument" in err_str and "key" in err_str)
+                    or "invalid api_key" in err_str
+                )
+                if is_invalid_key:
+                    logger.error(f"Gemini API key rejected as invalid: {e}")
+                    raise ValueError(f"Gemini authentication failed: Invalid API key ({e}).")
+
                 is_rate_limit = (
                     "429" in err_str
                     or "resource_exhausted" in err_str

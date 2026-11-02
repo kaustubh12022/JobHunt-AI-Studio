@@ -216,7 +216,7 @@ with st.sidebar:
                 disabled=is_running,
                 help="Paste one key, or separate multiple keys with commas.",
             )
-            api_keys_list = [k.strip() for k in raw_keys.replace("\n", ",").split(",") if k.strip()]
+            api_keys_list = [k.strip().strip("'\"`") for k in raw_keys.replace("\n", ",").split(",") if k.strip().strip("'\"`")]
         else:
             single_key = st.text_input(
                 "Gemini Paid API Key",
@@ -224,7 +224,7 @@ with st.sidebar:
                 type="password",
                 disabled=is_running,
             )
-            api_keys_list = [single_key.strip()] if single_key.strip() else []
+            api_keys_list = [single_key.strip().strip("'\"`")] if single_key.strip().strip("'\"`") else []
         ai_engine_instance.configure_keys(provider="gemini", gemini_keys=api_keys_list, gemini_rpm=gemini_rpm)
     elif provider == "DeepSeek":
         with st.expander("Model settings"):
@@ -233,7 +233,7 @@ with st.sidebar:
         if not default_ds:
             default_ds = os.environ.get("DEEPSEEK_API_KEY", "")
         ds_key = st.text_input("DeepSeek API Key", value=default_ds, type="password", disabled=is_running)
-        api_keys_list = [ds_key.strip()] if ds_key.strip() else []
+        api_keys_list = [ds_key.strip().strip("'\"`")] if ds_key.strip().strip("'\"`") else []
         ai_engine_instance.configure_keys(provider="deepseek", deepseek_key=ds_key)
     else:
         with st.expander("Model settings"):
@@ -242,7 +242,7 @@ with st.sidebar:
         if not default_oa:
             default_oa = os.environ.get("OPENAI_API_KEY", "")
         oa_key = st.text_input("OpenAI API Key", value=default_oa, type="password", disabled=is_running)
-        api_keys_list = [oa_key.strip()] if oa_key.strip() else []
+        api_keys_list = [oa_key.strip().strip("'\"`")] if oa_key.strip().strip("'\"`") else []
         ai_engine_instance.configure_keys(provider="openai", openai_key=oa_key)
 
     st.caption(f"{len(api_keys_list)} key(s) entered · {selected_model}" if api_keys_list else "Add an API key to enable your batch.")
@@ -703,7 +703,9 @@ with tab_batch:
 
     if (btn_run or btn_resume) and parsed_jobs is not None:
         st.session_state["batch_running"] = True
-        log_box = st.expander("Execution details", expanded=False)
+        status_box.info(f"Batch running: evaluating {len(parsed_jobs)} jobs in real time below...")
+        st.toast(f"Starting batch evaluation for {len(parsed_jobs)} jobs...", icon="🚀")
+        log_box = st.expander("Execution details", expanded=True)
         results_accumulator = list(checkpoint_completed_jobs) if btn_resume else []
         start_index = checkpoint_resume_index if btn_resume else 0
         if not btn_resume:

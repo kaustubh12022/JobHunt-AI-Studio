@@ -136,6 +136,15 @@ Full Job Description:
             "completion_tokens": comp_tok,
         }
     except Exception as e:
+        err_lower = str(e).lower()
+        if (
+            "authentication failed" in err_lower
+            or "invalid api key" in err_lower
+            or "unauthorized" in err_lower
+            or "please pass a valid api key" in err_lower
+        ):
+            # Fatal credential error: do not swallow, halt batch so user sees error immediately
+            raise
         logger.error(f"Error scoring job {job.get('company')} - {job.get('title')}: {e}")
         # Mark as failed stage without inventing scores or matches
         return {
