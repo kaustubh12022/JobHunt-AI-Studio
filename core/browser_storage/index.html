@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script>
+    function sendValue(val) {
+      window.parent.postMessage({
+        isStreamlitMessage: true,
+        type: "streamlit:setComponentValue",
+        value: val
+      }, "*");
+    }
+
+    window.addEventListener("message", function(event) {
+      if (!event.data) return;
+      if (event.data.type === "streamlit:render") {
+        const args = event.data.args || {};
+        const action = args.action || "read";
+
+        if (action === "save" && args.payload) {
+          try {
+            localStorage.setItem("jobhunt_studio_device_data", JSON.stringify(args.payload));
+          } catch(e) {
+            console.warn("Could not save to localStorage:", e);
+          }
+        } else if (action === "clear") {
+          try {
+            localStorage.removeItem("jobhunt_studio_device_data");
+          } catch(e) {
+            console.warn("Could not clear localStorage:", e);
+          }
+        }
+
+        // Always read and report the current stored state back to Streamlit
+        let stored = null;
+        try {
+          const raw = localStorage.getItem("jobhunt_studio_device_data");
+          if (raw) stored = JSON.parse(raw);
+        } catch(e) {}
+
+        sendValue(stored);
+      }
+    });
+
+    // Notify Streamlit that the component is loaded and ready
+    window.parent.postMessage({
+      isStreamlitMessage: true,
+      type: "streamlit:componentReady",
+      apiVersion: 1
+    }, "*");
+  </script>
+</head>
+<body style="margin: 0; padding: 0; background: transparent; overflow: hidden; height: 0;"></body>
+</html>

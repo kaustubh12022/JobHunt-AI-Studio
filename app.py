@@ -15,6 +15,7 @@ import streamlit as st
 
 from core.ai_engine import ai_engine_instance
 from core.ats_verifier import audit_resume_pdf
+from core.browser_storage import sync_browser_storage
 from core.cost_estimator import estimate_batch_cost
 from core.csv_parser import generate_sample_csv_str, parse_jobs_csv
 from core.health import perform_system_health_check
@@ -133,6 +134,35 @@ for key in ("batch_results", "zip_bytes"):
 # Track whether a batch run is in progress to enforce config immutability
 is_running = bool(st.session_state.get("batch_running", False))
 
+# ------------------------------------------
+# OPTION A: Browser Local Storage Sync
+# ------------------------------------------
+storage_action = st.session_state.pop("pending_storage_action", "read")
+storage_payload = st.session_state.pop("pending_storage_payload", None)
+
+saved_device_data = sync_browser_storage(
+    action=storage_action,
+    payload=storage_payload,
+    key="jobhunt_browser_storage_sync",
+)
+
+if saved_device_data and not st.session_state.get("device_data_synced", False):
+    if "api_keys" in saved_device_data and saved_device_data["api_keys"]:
+        st.session_state["saved_api_keys"] = saved_device_data["api_keys"]
+    if "provider" in saved_device_data and saved_device_data["provider"]:
+        st.session_state["saved_provider"] = saved_device_data["provider"]
+    if "gemini_tier" in saved_device_data and saved_device_data["gemini_tier"]:
+        st.session_state["saved_gemini_tier"] = saved_device_data["gemini_tier"]
+    if "profile_yaml" in saved_device_data and saved_device_data["profile_yaml"]:
+        try:
+            stored_prof = load_profile_from_str(saved_device_data["profile_yaml"])
+            apply_profile(stored_prof)
+            st.session_state.profile_editor = profile_to_yaml_str(stored_prof)
+            st.session_state["profile_notice"] = "Restored saved profile & credentials from this device."
+        except Exception:
+            pass
+    st.session_state["device_data_synced"] = True
+
 # ==========================================
 # SIDEBAR: Providers, Keys, Settings & Health
 # ==========================================
@@ -153,14 +183,19 @@ with st.sidebar:
     if is_running:
         st.markdown('<div class="locked-badge">&#128274; Batch running · settings locked</div>', unsafe_allow_html=True)
 
-    provider = st.selectbox("AI Provider", ["Google Gemini", "DeepSeek", "OpenAI"], disabled=is_running)
+    provider_options = ["Google Gemini", "DeepSeek", "OpenAI"]
+    saved_prov = st.session_state.get("saved_provider", "Google Gemini")
+    prov_idx = provider_options.index(saved_prov) if saved_prov in provider_options else 0
+    provider = st.selectbox("AI Provider", provider_options, index=prov_idx, disabled=is_running)
     api_keys_list: List[str] = []
     is_gemini_free = False
     gemini_rpm = 15
 
     if provider == "Google Gemini":
         with st.expander("Model & quota settings", expanded=False):
-            gemini_tier = st.radio("Gemini account tier", ["Free Tier", "Paid Tier"], disabled=is_running)
+            saved_tier = st.session_state.get("saved_gemini_tier", "Free Tier")
+            tier_idx = 0 if saved_tier == "Free Tier" else 1
+            gemini_tier = st.radio("Gemini account tier", ["Free Tier", "Paid Tier"], index=tier_idx, disabled=is_running)
             is_gemini_free = gemini_tier == "Free Tier"
             if is_gemini_free:
                 selected_model = "gemini-3.5-flash-lite"
@@ -168,10 +203,15 @@ with st.sidebar:
             else:
                 selected_model = st.selectbox("Gemini Paid Model", ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash"], disabled=is_running)
                 gemini_rpm = st.number_input("Max RPM Cap", min_value=15, max_value=300, value=60, disabled=is_running)
+
+        default_gemini = st.session_state.get("saved_api_keys", "") if saved_prov == "Google Gemini" else ""
+        if not default_gemini:
+            default_gemini = os.environ.get("GEMINI_API_KEYS", os.environ.get("GEMINI_API_KEY", ""))
+
         if is_gemini_free:
             raw_keys = st.text_input(
                 "Gemini API keys",
-                value=os.environ.get("GEMINI_API_KEYS", os.environ.get("GEMINI_API_KEY", "")),
+                value=default_gemini,
                 type="password",
                 disabled=is_running,
                 help="Paste one key, or separate multiple keys with commas.",
@@ -180,7 +220,7 @@ with st.sidebar:
         else:
             single_key = st.text_input(
                 "Gemini Paid API Key",
-                value=os.environ.get("GEMINI_API_KEY", ""),
+                value=default_gemini,
                 type="password",
                 disabled=is_running,
             )
@@ -189,17 +229,64 @@ with st.sidebar:
     elif provider == "DeepSeek":
         with st.expander("Model settings"):
             selected_model = st.selectbox("DeepSeek Model", ["deepseek-chat", "deepseek-reasoner"], disabled=is_running)
-        ds_key = st.text_input("DeepSeek API Key", value=os.environ.get("DEEPSEEK_API_KEY", ""), type="password", disabled=is_running)
+        default_ds = st.session_state.get("saved_api_keys", "") if saved_prov == "DeepSeek" else ""
+        if not default_ds:
+            default_ds = os.environ.get("DEEPSEEK_API_KEY", "")
+        ds_key = st.text_input("DeepSeek API Key", value=default_ds, type="password", disabled=is_running)
         api_keys_list = [ds_key.strip()] if ds_key.strip() else []
         ai_engine_instance.configure_keys(provider="deepseek", deepseek_key=ds_key)
     else:
         with st.expander("Model settings"):
             selected_model = st.selectbox("OpenAI Model", ["gpt-4o-mini", "gpt-4o"], disabled=is_running)
-        oa_key = st.text_input("OpenAI API Key", value=os.environ.get("OPENAI_API_KEY", ""), type="password", disabled=is_running)
+        default_oa = st.session_state.get("saved_api_keys", "") if saved_prov == "OpenAI" else ""
+        if not default_oa:
+            default_oa = os.environ.get("OPENAI_API_KEY", "")
+        oa_key = st.text_input("OpenAI API Key", value=default_oa, type="password", disabled=is_running)
         api_keys_list = [oa_key.strip()] if oa_key.strip() else []
         ai_engine_instance.configure_keys(provider="openai", openai_key=oa_key)
 
     st.caption(f"{len(api_keys_list)} key(s) entered · {selected_model}" if api_keys_list else "Add an API key to enable your batch.")
+
+    with st.expander("Device persistence (Remember me)", expanded=False):
+        st.caption("Securely store your API keys & candidate profile in your browser's private localStorage. Keys never touch server storage or database.")
+        c_save, c_clear = st.columns(2)
+        with c_save:
+            if st.button("Save device", help="Save current keys & profile on this browser", use_container_width=True, disabled=is_running):
+                curr_keys = ""
+                if provider == "Google Gemini":
+                    curr_keys = raw_keys if is_gemini_free else single_key
+                elif provider == "DeepSeek":
+                    curr_keys = ds_key
+                else:
+                    curr_keys = oa_key
+
+                prof_yaml_str = profile_to_yaml_str(st.session_state.profile) if "profile" in st.session_state else ""
+                st.session_state["pending_storage_action"] = "save"
+                st.session_state["pending_storage_payload"] = {
+                    "provider": provider,
+                    "api_keys": curr_keys,
+                    "gemini_tier": gemini_tier if provider == "Google Gemini" else None,
+                    "profile_yaml": prof_yaml_str,
+                }
+                st.session_state["saved_api_keys"] = curr_keys
+                st.session_state["saved_provider"] = provider
+                if provider == "Google Gemini":
+                    st.session_state["saved_gemini_tier"] = gemini_tier
+                st.session_state["device_data_synced"] = True
+                st.toast("Saved configuration to this browser!", icon="💾")
+                st.rerun()
+
+        with c_clear:
+            if st.button("Clear device", help="Wipe saved keys and profile from this browser", use_container_width=True, disabled=is_running):
+                st.session_state["pending_storage_action"] = "clear"
+                st.session_state["pending_storage_payload"] = None
+                st.session_state.pop("saved_api_keys", None)
+                st.session_state.pop("saved_provider", None)
+                st.session_state.pop("saved_gemini_tier", None)
+                st.session_state["device_data_synced"] = False
+                st.toast("Cleared saved browser data.", icon="🗑️")
+                st.rerun()
+
     st.divider()
 
     # Batch Parameters in Sidebar
@@ -330,13 +417,25 @@ with tab_profile:
             for label, key in (("Email", "email"), ("Phone", "phone"), ("Location", "address")):
                 st.text(f"{label}: {info.get(key) or 'Not provided'}")
             st.caption("Target roles: " + ", ".join(st.session_state.profile.get("target_roles", [])))
-            st.download_button(
-                "Download profile YAML",
-                profile_to_yaml_str(st.session_state.profile),
-                file_name="master_profile.yaml",
-                mime="text/yaml",
-                use_container_width=True,
-            )
+            col_d1, col_d2 = st.columns(2)
+            with col_d1:
+                st.download_button(
+                    "Download active profile (.yaml)",
+                    profile_to_yaml_str(st.session_state.profile),
+                    file_name="master_profile.yaml",
+                    mime="text/yaml",
+                    use_container_width=True,
+                    key="tab2_dl_active_yaml",
+                )
+            with col_d2:
+                st.download_button(
+                    "Download blank template (.yaml)",
+                    profile_to_yaml_str(DEFAULT_PROFILE_TEMPLATE),
+                    file_name="candidate_profile_template.yaml",
+                    mime="text/yaml",
+                    use_container_width=True,
+                    key="tab2_dl_blank_yaml",
+                )
 
     with st.expander("Edit profile YAML", expanded=False):
         st.session_state.setdefault("profile_editor", profile_to_yaml_str(st.session_state.profile))
@@ -367,13 +466,24 @@ with tab_profile:
 # ------------------------------------------
 with tab_guide:
     section("01", "Start with the right inputs", "Upload a jobs CSV and a YAML or JSON candidate profile.")
-    st.download_button(
-        "Download sample jobs CSV",
-        generate_sample_csv_str(),
-        file_name="sample_jobs_template.csv",
-        mime="text/csv",
-        type="primary",
-    )
+    guide_col1, guide_col2 = st.columns(2)
+    with guide_col1:
+        st.download_button(
+            "Download sample jobs CSV",
+            generate_sample_csv_str(),
+            file_name="sample_jobs_template.csv",
+            mime="text/csv",
+            type="primary",
+            use_container_width=True,
+        )
+    with guide_col2:
+        st.download_button(
+            "Download candidate profile template (.yaml)",
+            profile_to_yaml_str(DEFAULT_PROFILE_TEMPLATE),
+            file_name="candidate_profile_template.yaml",
+            mime="text/yaml",
+            use_container_width=True,
+        )
     st.dataframe(
         pd.DataFrame([
             {"Field": "Company", "Required": "Yes", "Accepted headers": "Company, employer, organization"},
@@ -449,6 +559,47 @@ with tab_batch:
                 parsed_jobs = None
         else:
             st.caption("Company, role and description required. Common column names are detected automatically.")
+
+        st.divider()
+        st.markdown("##### Candidate master profile")
+        cprof_c1, cprof_c2 = st.columns([1.2, 1])
+        with cprof_c1:
+            quick_prof = st.file_uploader(
+                "Upload profile (.yaml / .json)",
+                type=["yaml", "yml", "json"],
+                key="ws_quick_profile_uploader",
+                disabled=is_running,
+                help="Quickly switch candidate profile for this batch.",
+            )
+            if quick_prof is not None:
+                if st.button("Apply profile to workspace", key="ws_btn_apply_prof", use_container_width=True):
+                    try:
+                        new_prof = load_profile_from_str(quick_prof.getvalue().decode("utf-8-sig"))
+                        apply_profile(new_prof)
+                        st.session_state.profile_editor = profile_to_yaml_str(new_prof)
+                        st.toast("Profile applied successfully!", icon="✅")
+                        st.rerun()
+                    except Exception as err:
+                        st.error(f"Could not apply profile: {err}")
+        with cprof_c2:
+            active_info = st.session_state.profile.get("personal_information", {})
+            st.caption("Active: **" + escape(f"{active_info.get('name', 'Jane')} {active_info.get('surname', 'Doe')}") + "**")
+            st.download_button(
+                "Export active profile (.yaml)",
+                profile_to_yaml_str(st.session_state.profile),
+                file_name="master_profile.yaml",
+                mime="text/yaml",
+                use_container_width=True,
+                key="ws_dl_active_profile",
+            )
+            st.download_button(
+                "Blank template (.yaml)",
+                profile_to_yaml_str(DEFAULT_PROFILE_TEMPLATE),
+                file_name="candidate_profile_template.yaml",
+                mime="text/yaml",
+                use_container_width=True,
+                key="ws_dl_blank_template",
+            )
 
     with settings_col:
         with st.container(border=True):

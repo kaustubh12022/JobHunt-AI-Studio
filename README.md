@@ -3,7 +3,7 @@
 [![Live App](https://img.shields.io/badge/Render-Live_App-2563eb?logo=render&logoColor=white)](https://jobhunt-ai-studio.onrender.com)
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-blue.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![Playwright](https://img.shields.io/badge/Playwright-Chromium-green.svg?logo=playwright&logoColor=white)](https://playwright.dev/)
-[![Tests](https://img.shields.io/badge/Tests-44_Passed-success.svg)](https://github.com/kaustubh12022/JobHunt-AI-Studio)
+[![Tests](https://img.shields.io/badge/Tests-48_Passed-success.svg)](https://github.com/kaustubh12022/JobHunt-AI-Studio)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **JobHunt AI Studio** is an autonomous, production-ready AI resume tailoring and batch evaluation engine. It enables job seekers, freshers, and experienced engineers to upload batch job listings (CSV), evaluate candidate-job relevance with zero-hallucination guardrails, and generate tailored, single-page, ATS-compliant PDF resumes bundled into ready-to-download ZIP archives.
@@ -169,6 +169,21 @@ skills:
 
 ---
 
+## 💾 Browser Auto-Remember & 1-Click Portability
+
+JobHunt AI Studio gives candidates full persistence without compromising security:
+
+- **Browser Auto-Remember (Private `localStorage`)**:
+  - In the sidebar under **Device persistence (Remember me)**, click **Save device** to remember your API keys, AI provider, and master profile across browser sessions.
+  - Zero credentials touch server disks or databases; everything remains in your local browser sandbox.
+  - Click **Clear device** at any time to wipe stored data.
+- **1-Click Profile Upload & Export**:
+  - **In Workspace (Setup Tab)**: Upload your `.yaml` profile directly alongside your CSV without switching tabs.
+  - **Export Active Profile**: Download your customized profile as YAML with one click.
+  - **Blank Template Download**: Grab a clean, pre-structured `candidate_profile_template.yaml` directly from the Workspace, Candidate Profile, or Guide tabs.
+
+---
+
 ## 🚀 Local Setup & Quick Start
 
 If you want to run JobHunt AI Studio locally on your computer:
@@ -215,7 +230,7 @@ Open your browser at `http://localhost:8501`.
 
 ## 🧪 Running Tests
 
-The test suite includes 44 unit and integration tests covering SQLite ACID transactions, worker lease recovery, input safety, URL sanitization, multi-role tailoring, and Playwright ATS PDF verification:
+The test suite includes 48 unit and integration tests covering SQLite ACID transactions, worker lease recovery, input safety, URL sanitization, multi-role tailoring, Playwright ATS PDF verification, and browser storage portability:
 
 ```bash
 pytest tests -o pythonpath=. -v
