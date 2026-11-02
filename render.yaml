@@ -1,0 +1,20 @@
+# Render Production Deployment Blueprint
+# Uses persistent disk to preserve SQLite runs and artifacts across restarts and deploys.
+# Notice: A persistent disk restricts the service to a single instance (numInstances: 1).
+services:
+  - type: web
+    name: jobhunt-ai-studio
+    env: docker
+    dockerfilePath: Dockerfile
+    plan: standard
+    region: oregon
+    numInstances: 1
+    disk:
+      name: jobhunt-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: PORT
+        value: 8501
+      - key: PERSISTENT_DATA_DIR
+        value: /var/data

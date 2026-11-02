@@ -1,0 +1,265 @@
+personal_information:
+  name: "Kaustubh"
+  surname: "Kale"
+  date_of_birth: ""
+  country: "India"
+  state: "Maharashtra"
+  city: "Pune"
+  address: "Pune, Maharashtra, India"
+  zip_code: "411037"
+  phone_prefix: "+91"
+  phone: "+91-9975526627"
+  email: "kaustubh.kale.work@gmail.com"
+  github: "github.com/kaustubhkale12"
+  linkedin: "linkedin.com/in/kaustubhkale12"
+
+profile_summary: "Graduate Engineer skilled in Java, Python, SQL, REST APIs, DSA, and full-stack development with internship experience in modular backend services, database optimization, responsive UI, and AI-driven automation pipelines. Strong foundation in Spring Boot, MERN stack (React, Node.js, Express, MongoDB), and Generative AI / DeepSeek integrations."
+
+education_details:
+  - education_level: "Bachelor of Engineering in Information Technology"
+    institution: "SKNSITS, Lonavala (Savitribai Phule Pune University)"
+    location: "Pune, India"
+    field_of_study: "Information Technology"
+    final_evaluation_grade: "Cumulative CGPA: 7.51 / 10.0"
+    start_date: "2022"
+    year_of_completion: "2026"
+    dates: "2022 - 2026"
+    secondary_education:
+      - "12th (HSC): 82.33% | Maharashtra Board (2022)"
+      - "10th (SSC): 88.00% | Maharashtra Board (2020)"
+
+experience_details:
+  - position: "Java Developer Intern"
+    company: "CWIPedia Technologies"
+    employment_period: "Jan 2025 - Feb 2025"
+    dates: "Jan 2025 - Feb 2025"
+    location: "Pune, India"
+    industry: "Software Engineering"
+    key_responsibilities:
+      - responsibility_1: "Engineered modular backend services using Java, SQL, JDBC, and REST APIs, improving code reusability by 30%."
+      - responsibility_2: "Optimized database query pipelines and API payloads using Data Structures & Algorithms, reducing latency by 20%."
+      - responsibility_3: "Developed responsive user interfaces with HTML5, CSS3, and JavaScript, accelerating page rendering speed by 25%."
+      - responsibility_4: "Participated in daily Agile/Scrum stand-ups, delivering verified feature modules within 2-week sprint cycles."
+
+projects:
+  - name: "SmartApply: AI-Driven Job Automation Pipeline"
+    tech_stack: "Python, AsyncIO, DeepSeek API, Pandas"
+    link: "github.com/kaustubhkale12"
+    description_bullets:
+      - "Engineered an asynchronous job extraction pipeline scraping 2,000+ live postings daily across multiple portals."
+      - "Implemented DeepSeek LLM scoring and JSON schema validation, ranking listings by relevance with >80% cost reduction."
+      - "Built dynamic resume rendering with automated keyword tailoring, persisting applicant telemetry in SQLite/Pandas."
+    description: "Engineered an asynchronous job extraction pipeline scraping 2,000+ live postings daily across multiple portals. Implemented DeepSeek LLM scoring and JSON schema validation, ranking listings by relevance with >80% cost reduction. Built dynamic resume rendering with automated keyword tailoring, persisting applicant telemetry in SQLite/Pandas."
+
+  - name: "CampFlow: Hospitality Automation & Booking Suite"
+    tech_stack: "React, Node.js, Express, MongoDB"
+    link: "github.com/kaustubhkale12"
+    description_bullets:
+      - "Built a multi-tenant booking and management portal adopted by 5+ commercial business owners to eliminate booking overlaps."
+      - "Designed real-time analytics dashboards for Property Managers with automated reservation scheduling and push notifications."
+      - "Deployed production build on Vercel with RESTful API microservices, streamlining customer reservation workflows."
+    description: "Built a multi-tenant booking and management portal adopted by 5+ commercial business owners to eliminate booking overlaps. Designed real-time analytics dashboards for Property Managers with automated reservation scheduling and push notifications. Deployed production build on Vercel with RESTful API microservices, streamlining customer reservation workflows."
+
+  - name: "Neon-Pulse – Pattern Recognition & Logic Engine"
+    tech_stack: "Vanilla JavaScript, CSS3, HTML5"
+    link: "github.com/kaustubhkale12"
+    description_bullets:
+      - "Engineered an algorithmic pattern engine with recursive sequence logic managing 20+ scaling difficulty tiers."
+      - "Optimized browser DOM rendering and state validation arrays, achieving a zero-lag interactive response cycle."
+    description: "Engineered an algorithmic pattern engine with recursive sequence logic managing 20+ scaling difficulty tiers. Optimized browser DOM rendering and state validation arrays, achieving a zero-lag interactive response cycle."
+
+  - name: "Personal AI OS: Local LLM & Voice Agent Assistant"
+    tech_stack: "Python, Ollama, LangChain, FastAPI, SQLite"
+    link: "github.com/kaustubhkale12"
+    description_bullets:
+      - "Architected an autonomous local AI workstation agent integrating Ollama local LLMs and LangChain tool chains."
+      - "Engineered low-latency voice and text streaming pipelines with asynchronous FastAPI endpoints and SQLite session state."
+      - "Implemented custom tool-calling agents for automated file management, calendar synchronization, and browser automation."
+    description: "Architected an autonomous local AI workstation agent integrating Ollama local LLMs and LangChain tool chains. Engineered low-latency voice and text streaming pipelines with asynchronous FastAPI endpoints and SQLite session state. Implemented custom tool-calling agents for automated file management, calendar synchronization, and browser automation."
+
+  - name: "MedFlow: Healthcare Appointment & Inventory Engine"
+    tech_stack: "Java, Spring Boot, MySQL, REST APIs, JWT"
+    link: "github.com/kaustubhkale12"
+    description_bullets:
+      - "Engineered secure healthcare microservices with Spring Boot, JPA/Hibernate, and MySQL, handling patient scheduling."
+      - "Implemented role-based access control with JWT authentication, ensuring HIPAA compliance across hospital departments."
+      - "Optimized database indexing and transactional query pipelines, improving report generation throughput by 40%."
+    description: "Engineered secure healthcare microservices with Spring Boot, JPA/Hibernate, and MySQL, handling patient scheduling. Implemented role-based access control with JWT authentication, ensuring HIPAA compliance across hospital departments. Optimized database indexing and transactional query pipelines, improving report generation throughput by 40%."
+
+  - name: "C54-Casino: Real-Time Multiplayer Gaming Platform"
+    tech_stack: "React, Node.js, Socket.IO, Tailwind CSS"
+    link: "github.com/kaustubhkale12"
+    description_bullets:
+      - "Developed a full-stack real-time multiplayer casino platform with interactive card and wheel games."
+      - "Built bi-directional WebSocket game loops using Socket.IO, synchronizing multiplayer state across concurrent players."
+      - "Designed modern responsive cyber-themed interfaces with React, Vite, and Tailwind CSS."
+    description: "Developed a full-stack real-time multiplayer casino platform with interactive card and wheel games. Built bi-directional WebSocket game loops using Socket.IO, synchronizing multiplayer state across concurrent players. Designed modern responsive cyber-themed interfaces with React, Vite, and Tailwind CSS."
+
+achievements:
+  - name: "Lead NSS Coordinator"
+    description: "Directed campus socio-educational initiatives leading 50+ student volunteers."
+  - name: "Repository Discipline"
+    description: "Maintained 100% clean Git branch histories with 0 merge conflicts across team releases."
+
+certifications:
+  - name: "Microsoft Azure Fundamentals (AZ-900)"
+    description: "Foundational cloud architecture, compute services, and enterprise security."
+  - name: "Google Cybersecurity Certificate"
+    description: "Comprehensive enterprise security controls, network protection, and defense protocols."
+
+skills:
+  # --- Core Languages ---
+  - "Java"
+  - "Python"
+  - "SQL"
+  - "JavaScript"
+  - "TypeScript"
+  - "HTML"
+  - "CSS"
+
+  # --- Java & Backend Development ---
+  - "Spring Boot"
+  - "Spring Core"
+  - "Hibernate/JPA"
+  - "JDBC"
+  - "REST APIs"
+  - "JSON"
+  - "MVC Architecture"
+  - "MySQL"
+  - "SQLite"
+  - "JWT Auth"
+  - "DB Schema Design"
+
+  # --- MERN & Frontend Stack ---
+  - "React"
+  - "Next.js"
+  - "Node.js"
+  - "MongoDB"
+  - "Mongoose"
+  - "Vite"
+  - "Tailwind CSS"
+  - "State Management (Context/Redux)"
+
+  # --- Applied AI, GenAI & Data Pipelines ---
+  - "Generative AI"
+  - "DeepSeek API"
+  - "LLM API Integration"
+  - "Prompt Engineering"
+  - "RAG & Vector Search"
+  - "MCP & Tool Calling"
+  - "LangChain"
+  - "Structured JSON Schema"
+  - "FastAPI"
+  - "AsyncIO Pipelines"
+  - "Pandas"
+  - "Asyncio"
+  - "Jinja2"
+  - "BeautifulSoup"
+  - "Regex"
+  - "n8n AI Agents"
+  - "Telemetry & Logging"
+
+  # --- Computer Science Fundamentals ---
+  - "Data Structures & Algorithms"
+  - "OOP"
+  - "DBMS"
+  - "Problem-Solving"
+
+  # --- Cloud, Developer Tools & Platforms ---
+  - "Git"
+  - "GitHub"
+  - "VS Code"
+  - "IntelliJ IDEA"
+  - "Postman"
+  - "Maven"
+  - "Spring Tool Suite (STS)"
+  - "Agile/Scrum"
+  - "Linux/Bash"
+  - "Windows Task Scheduler"
+  - "Excel (Automation)"
+  - "Vercel & Render"
+  - "Cursor IDE & GitHub Copilot"
+  - "Microsoft Azure Fundamentals"
+  - "Cybersecurity - Google (Coursera)"
+
+skills_structured:
+  Core Languages:
+    - "Java"
+    - "Python"
+    - "SQL"
+    - "JavaScript"
+    - "TypeScript"
+    - "HTML"
+    - "CSS"
+  Java & Backend:
+    - "Spring Boot"
+    - "Spring Core"
+    - "Hibernate/JPA"
+    - "REST APIs"
+    - "JDBC"
+    - "MySQL"
+    - "SQLite"
+    - "JWT Auth"
+    - "DB Schema Design"
+    - "MVC Architecture"
+    - "JSON"
+  MERN & Frontend:
+    - "React"
+    - "Next.js"
+    - "Node.js"
+    - "MongoDB"
+    - "Mongoose"
+    - "State Management (Context/Redux)"
+    - "Tailwind CSS"
+    - "Vite"
+  Applied AI & Automation:
+    - "Generative AI"
+    - "DeepSeek API"
+    - "LLM API Integration"
+    - "RAG & Vector Search"
+    - "MCP & Tool Calling"
+    - "LangChain"
+    - "Structured JSON Schema"
+    - "Prompt Engineering"
+    - "FastAPI"
+    - "AsyncIO Pipelines"
+    - "n8n AI Agents"
+    - "Telemetry & Logging"
+  CS Fundamentals:
+    - "Data Structures & Algorithms"
+    - "OOP"
+    - "DBMS"
+    - "Problem-Solving"
+  Cloud/DevOps/Tools:
+    - "Microsoft Azure Fundamentals"
+    - "Git"
+    - "GitHub"
+    - "Postman"
+    - "VS Code"
+    - "IntelliJ IDEA"
+    - "Maven"
+    - "Spring Tool Suite (STS)"
+    - "Agile/Scrum"
+    - "Linux/Bash"
+    - "Vercel & Render"
+    - "Cursor IDE & GitHub Copilot"
+
+languages:
+  - language: "English"
+    proficiency: "Professional"
+  - language: "Hindi"
+    proficiency: "Native"
+  - language: "Marathi"
+    proficiency: "Native"
+
+work_preferences:
+  remote_work: "Yes"
+  in_person_work: "Yes"
+  open_to_relocation: "Yes"
+
+target_roles:
+  - "Java Developer"
+  - "Software Engineer"
+  - "Backend Developer"
+  - "Full Stack Developer"
+  - "AI / GenAI Developer"

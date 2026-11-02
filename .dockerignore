@@ -1,0 +1,37 @@
+# Git and Version Control
+.git/
+.gitignore
+
+# Environment and sensitive keys
+.env
+.env.*
+
+# Python Cache & Virtual Environments
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.venv/
+env/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Temporary data & artifacts
+temp/
+*.tmp
+*.log
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Build artifacts & local tests
+tests/
+dist/
+build/
+*.egg-info/

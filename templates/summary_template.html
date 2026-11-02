@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JobHunt AI Studio — Batch Execution Report</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            color: #0f172a;
+            margin: 0;
+            padding: 32px;
+            background: #f8fafc;
+        }
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 32px;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
+        }
+        header {
+            border-bottom: 2px solid #e2e8f0;
+            padding-bottom: 20px;
+            margin-bottom: 24px;
+        }
+        h1 {
+            color: #1e3a8a;
+            font-size: 24px;
+            margin: 0 0 8px 0;
+        }
+        .meta {
+            color: #64748b;
+            font-size: 14px;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            margin-bottom: 32px;
+        }
+        .card {
+            background: #f1f5f9;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            padding: 16px 20px;
+        }
+        .card .label {
+            font-size: 12px;
+            font-weight: 600;
+            color: #475569;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .card .value {
+            font-size: 26px;
+            font-weight: 700;
+            color: #1e3a8a;
+            margin-top: 4px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        th {
+            background: #f8fafc;
+            color: #334155;
+            font-weight: 600;
+            text-align: left;
+            padding: 12px 14px;
+            border-bottom: 2px solid #cbd5e1;
+        }
+        td {
+            padding: 12px 14px;
+            border-bottom: 1px solid #e2e8f0;
+            vertical-align: top;
+        }
+        tr:hover {
+            background: #f8fafc;
+        }
+        .score-pill {
+            display: inline-block;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 6px;
+            font-size: 12px;
+        }
+        .score-high { background: #dcfce7; color: #15803d; }
+        .score-mid { background: #fef9c3; color: #854d0e; }
+        .score-low { background: #fee2e2; color: #b91c1c; }
+
+        .badge-status {
+            display: inline-block;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 3px 8px;
+            border-radius: 9999px;
+        }
+        .status-tailored { background: #dbeafe; color: #1e40af; }
+        .status-skipped { background: #f1f5f9; color: #64748b; }
+        
+        .pdf-link {
+            color: #1e3a8a;
+            font-weight: 500;
+            text-decoration: none;
+        }
+        .pdf-link:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>JobHunt AI Studio &mdash; Batch Run Executive Report</h1>
+            <div class="meta">
+                Candidate: <strong>{{ candidate_name }}</strong> &bull; Generated: {{ run_date }} &bull; Threshold: &ge;{{ threshold }}%
+            </div>
+        </header>
+
+        <div class="stats-grid">
+            <div class="card">
+                <div class="label">Total Ingested</div>
+                <div class="value">{{ total_jobs }}</div>
+            </div>
+            <div class="card">
+                <div class="label">Resumes Tailored</div>
+                <div class="value" style="color: #15803d;">{{ tailored_count }}</div>
+            </div>
+            <div class="card">
+                <div class="label">Average Match</div>
+                <div class="value">{{ avg_score }}%</div>
+            </div>
+            <div class="card">
+                <div class="label">Score Threshold</div>
+                <div class="value">{{ threshold }}%</div>
+            </div>
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Company</th>
+                    <th>Job Title</th>
+                    <th>Score</th>
+                    <th>Status</th>
+                    <th>Tailored Resume PDF</th>
+                    <th>Match Reason</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in results %}
+                <tr>
+                    <td><strong>{{ r.company }}</strong><br><small style="color: #64748b;">{{ r.location }}</small></td>
+                    <td>
+                        {{ r.title }}
+                        {% if r.url and r.url != 'N/A' %}
+                        <br><a href="{{ r.url }}" target="_blank" style="font-size: 11px; color: #3b82f6;">View Posting &rarr;</a>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <span class="score-pill {% if r.match_score >= 75 %}score-high{% elif r.match_score >= threshold %}score-mid{% else %}score-low{% endif %}">
+                            {{ r.match_score }}%
+                        </span>
+                    </td>
+                    <td>
+                        <span class="badge-status {% if r.pdf_path %}status-tailored{% else %}status-skipped{% endif %}">
+                            {{ r.status }}
+                        </span>
+                    </td>
+                    <td>
+                        {% if r.pdf_path %}
+                            <span class="pdf-link">&#128196; {{ r.pdf_filename }}</span>
+                        {% else %}
+                            <span style="color: #94a3b8;">Below threshold</span>
+                        {% endif %}
+                    </td>
+                    <td style="color: #475569; font-size: 12px;">{{ r.reason }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>
