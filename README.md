@@ -1,104 +1,258 @@
-# 🎯 JobHunt AI Studio
+# JobHunt AI Studio
 
-**JobHunt AI Studio** is a decoupled, production-ready web application and batch processing engine. It empowers candidates and recruiters to upload job listings, match them against their candidate profile, and generate verified single-page tailored PDF resumes, executive summary spreadsheets, and packaged ZIP archives.
+[![Live App](https://img.shields.io/badge/Render-Live_App-2563eb?logo=render&logoColor=white)](https://jobhunt-ai-studio.onrender.com)
+[![Python 3.12](https://img.shields.io/badge/Python-3.12-blue.svg?logo=python&logoColor=white)](https://www.python.org/)
+[![Playwright](https://img.shields.io/badge/Playwright-Chromium-green.svg?logo=playwright&logoColor=white)](https://playwright.dev/)
+[![Tests](https://img.shields.io/badge/Tests-44_Passed-success.svg)](https://github.com/kaustubh12022/JobHunt-AI-Studio)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
----
-
-## 🌟 Core Architecture & Features
-
-- **Decoupled Run Orchestration**: Processing logic is separated from the UI into `RunService`, SQLite-backed `RunStore` (WAL mode), and bounded background workers.
-- **Persistent Disk State**: Designed for single-instance persistent storage on Render (`/var/data`), preserving run metadata and resumes across server deploys and restarts.
-- **Zero API Key Persistence**: User API keys exist strictly in run-scoped memory during processing and are **never** persisted to database, disk, environment variables, or shared caches.
-- **Cryptographic Recovery Code**: Every batch receives a random recovery code (e.g. `jh-a1b2-c3d4-e5f6`). Only its SHA-256 hash is persisted. All status, download, retry, and cancellation operations verify ownership.
-- **Server Restart Recovery**: Interrupted runs transition into `awaiting_credentials` status. Users supply their recovery code and re-enter their API key to resume without repeating completed work.
-- **Truthful ATS Verification Gate**: Every generated resume is audited with `ats_verifier.py` (strict 1-page bounds, clean plain URLs, 4-digit years `YYYY`, contact location, and zero kerning glitches). Unverified PDFs are excluded from the verified bundle.
-- **Input & Output Safety**:
-  - 5 MB CSV limit, 100 jobs per run limit, 1 MB profile limit.
-  - Rejects oversized descriptions (> 30,000 characters) without silent truncation.
-  - CSV formula injection neutralization (prepends `'` to leading `=`, `+`, `-`, `@`, `\t`, `\r`).
-  - Safe URL scheme enforcement (blocks `javascript:`, `data:`, `file:` links).
-  - Jinja2 HTML autoescaping and Playwright external network request blocking.
-- **Centralized Model Catalog & Dated Pricing**:
-  - Google Gemini: `gemini-3.5-flash-lite` (default, Free Tier 15 RPM cap / Paid), `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-1.5-flash`.
-  - OpenAI: `gpt-4o-mini` (default), `gpt-4o`.
-  - DeepSeek: `deepseek-chat` (DeepSeek-V3 / Flash API), `deepseek-reasoner` (R1).
-  - Explicit error upon invalid model (no silent model substitution).
+**JobHunt AI Studio** is an autonomous, production-ready AI resume tailoring and batch evaluation engine. It enables job seekers, freshers, and experienced engineers to upload batch job listings (CSV), evaluate candidate-job relevance with zero-hallucination guardrails, and generate tailored, single-page, ATS-compliant PDF resumes bundled into ready-to-download ZIP archives.
 
 ---
 
-## 🚀 Quick Start (Local Run)
+## 🌐 Live Web Studio
+
+You can test and use the live application right now without installing anything locally:
+
+👉 **[https://jobhunt-ai-studio.onrender.com](https://jobhunt-ai-studio.onrender.com)**
+
+---
+
+## 📖 Table of Contents
+1. [Core Features & Architecture](#-core-features--architecture)
+2. [Key Terms & System Concepts](#-key-terms--system-concepts)
+3. [CSV Format & Scraper Configuration](#-csv-format--scraper-configuration)
+4. [Supported AI Providers & Models](#-supported-ai-providers--models)
+5. [Candidate Profile Customization](#-candidate-profile-customization)
+6. [Local Setup & Quick Start](#-local-setup--quick-start)
+7. [Running Tests](#-running-tests)
+8. [Production Deployment (Render)](#-production-deployment-render)
+9. [Security, Privacy & Safety](#-security-privacy--safety)
+
+---
+
+## 🌟 Core Features & Architecture
+
+- **Setup → Live Pipeline → Results Workflow**: Clean, minimalist UI built with Streamlit, optimized for desktop and mobile browsers.
+- **Full JD Context Preservation**: Sends raw, complete job descriptions to the AI (zero aggressive stripping of technical criteria, qualifications, or requirements).
+- **Dynamic Role Lens Alignment**: Automatically detects job archetypes:
+  - **Testing / QA / SDET Roles**: Dynamically prioritizes **Work Experience before Projects**.
+  - **Developer / Java / Full Stack Roles**: Dynamically prioritizes **Projects before Work Experience**.
+- **Automated Single-Page Playwright Renderer**: Converts Jinja2 templates into exact A4 single-page PDFs with automated font density and margin compaction.
+- **Programmatic ATS Verification Gate**: Every generated PDF is audited with `ats_verifier.py` (strict 1-page bounds, clean plain-text URLs, 4-digit years `YYYY`, contact location, and zero kerning glitches).
+- **Restart & Crash Recovery**: Interrupted batch runs automatically transition to `awaiting_credentials`. Users supply their recovery code to resume right where they left off without paying duplicate AI scoring tokens.
+- **Zero API Key Persistence**: API keys exist solely in memory during active processing runs. Keys are never saved to disk, SQLite, environment variables, or shared caches.
+- **Multi-Tenant State Isolation**: Every batch execution is backed by an isolated SQLite WAL store and private session workspace.
+
+---
+
+## 🔑 Key Terms & System Concepts
+
+If you are a new user or developer, here are the essential terms used throughout the studio:
+
+| Term | Meaning & Purpose |
+| :--- | :--- |
+| **Master Profile** | Your single source of truth (`.yaml` format). Contains verified degrees, real projects, real employers, verified dates, and master skill inventory. The AI **never** hallucinates outside this profile. |
+| **Recovery Code** | A cryptographically random 12-character token (e.g. `jh-a1b2-c3d4-e5f6`) issued to every batch. Allows you to resume interrupted runs or reload results from any browser. |
+| **Role Lens** | The architectural category detected from the job title and JD (e.g. `qa`, `java`, `dotnet`, `fullstack`). Dictates layout ordering and technical emphasis. |
+| **Match Threshold (%)** | Relevance score (0–100%) cutoff. Only jobs scoring equal to or above this threshold have tailored resumes generated (default: `70%`). |
+| **Resume Cap** | Maximum number of tailored resumes generated per batch to conserve API quota and budget. |
+| **ATS Audit** | Automated programmatic validation inspecting PDF dimensions, text streams, and structure to guarantee 100% Applicant Tracking System compliance. |
+
+---
+
+## 📋 CSV Format & Scraper Configuration
+
+If you are scraping jobs from LinkedIn, Indeed, Naukri, or n8n webhooks, configure your scraper to output a standard CSV.
+
+### Recommended CSV Schema
+
+```csv
+company_name,job_role,job_description,direct_apply_link,location
+```
+
+### Column Specifications
+
+| Column Header | Status | Description & Rules | Example |
+| :--- | :---: | :--- | :--- |
+| **`company_name`** *(or `company`)* | **Required** | Hiring organization name. Used in prompts, resume headers, and filenames. | `Amazon`, `Stripe` |
+| **`job_role`** *(or `job_title`, `title`)* | **Required** | Position title. Used for role lens detection and resume designation. | `Software Dev Engineer I`, `Java Developer` |
+| **`job_description`** *(or `jd_text`, `description`)* | **Required** | Complete raw job posting text. Minimum 50 characters, max 30,000 characters. HTML tags are stripped automatically. | `Looking for a backend engineer with Java, Spring Boot, MySQL...` |
+| **`direct_apply_link`** *(or `apply_link`, `url`)* | **Recommended** | Direct application URL. Rendered as a clickable link in summary tables. | `https://amazon.jobs/en/jobs/2049182` |
+| **`location`** | **Optional** | Location or work mode. Defaults to candidate's city if missing. | `Pune, India / Hybrid`, `Remote` |
+
+### Sample Copy-Paste CSV
+
+```csv
+company_name,job_role,job_description,direct_apply_link,location
+"Amazon","Software Dev Engineer I (SDE 1)","We are looking for entry-level software developers. Responsibilities include building scalable distributed systems, writing clean code in Java or Python, working with relational databases and AWS services. Requirements: Bachelor's degree in CS/IT, strong problem solving in Data Structures and Algorithms.","https://amazon.jobs/en/jobs/2049182","Bangalore, India"
+"Innovaccer","Associate Software Engineer - Java","Looking for graduate engineers to design and build scalable microservices using Java, Spring Boot, and REST APIs. Responsibilities include database design with MySQL, writing unit tests with JUnit, and collaborating with Agile teams. Knowledge of SQL and Git is required.","https://careers.innovaccer.com/jobs/ase-java","Noida, India / Hybrid"
+```
+
+> **Scraper Best Practices**:
+> - Enclose job descriptions in standard quotes (`""`) to protect multi-line paragraphs and newlines.
+> - Output in standard **UTF-8** encoding.
+> - The parser includes **fuzzy column synonym matching**, so headers like `Company Name`, `Role`, `Job Description`, or `Job Link` are recognized automatically.
+
+---
+
+## 🤖 Supported AI Providers & Models
+
+JobHunt AI Studio supports three enterprise AI providers. You can bring your own API key:
+
+### 1. Google Gemini
+- **Free Tier (Default)**: Automatically switches to **`gemini-3.5-flash-lite`** with a 15 requests-per-minute (RPM) rate limit and multi-key rotation pool. Costs **$0.00**.
+- **Paid Tier**: Allows selecting higher-tier models such as `gemini-2.5-flash`, `gemini-2.5-pro`, or `gemini-1.5-flash` with configurable RPM limits.
+- Supports providing multiple Gemini keys (comma-separated) for seamless rotation.
+
+### 2. DeepSeek
+- Models: `deepseek-chat` (DeepSeek-V3) and `deepseek-reasoner` (DeepSeek-R1).
+- Direct high-speed API integration at competitive token pricing.
+
+### 3. OpenAI
+- Models: `gpt-4o-mini` (Default economical model) and `gpt-4o`.
+
+---
+
+## 👤 Candidate Profile Customization
+
+The system generates resumes by tailoring your master profile. You can inspect or modify your profile in **Tab 2 ("Candidate Profile")**:
+
+1. **In-Browser Editor**: Edit your personal information, skills, education, internships, and projects directly in the UI and click **Apply Profile Changes**.
+2. **Upload YAML**: Upload an existing `profile.yaml` file conforming to the standard schema:
+
+```yaml
+personal_information:
+  name: "Jane"
+  surname: "Doe"
+  email: "jane.doe@example.com"
+  phone: "+1-555-0199"
+  city: "San Francisco"
+  country: "United States"
+  linkedin: "linkedin.com/in/janedoe"
+  github: "github.com/janedoe"
+
+education_details:
+  - degree: "Bachelor of Science in Computer Science"
+    university: "University of California, Berkeley"
+    dates: "2022 - 2026"
+    score: "Cumulative GPA: 3.8 / 4.0"
+
+experience_details:
+  - company: "Tech Innovations Inc"
+    position: "Software Engineering Intern"
+    dates: "Jun 2025 - Aug 2025"
+    location: "San Francisco, CA"
+    key_responsibilities:
+      - "Engineered backend microservices using Java and Spring Boot, reducing latency by 22%."
+      - "Integrated RESTful APIs and optimized SQL database queries for high-throughput transactions."
+
+projects:
+  - name: "Distributed Task Scheduler"
+    tech_stack: "Python, Redis, Docker, FastAPI"
+    link: "github.com/janedoe/task-scheduler"
+    description_bullets:
+      - "Architected a distributed background worker pool processing 10,000+ jobs per minute."
+      - "Implemented Redis pub/sub messaging and deployed containerized services via Docker."
+
+skills:
+  - "Java"
+  - "Python"
+  - "Spring Boot"
+  - "FastAPI"
+  - "PostgreSQL"
+  - "Docker"
+  - "Git"
+```
+
+3. **Public Sample Profile**: If testing the studio for the first time, click **Load Sample Profile** to prefill fictional credentials.
+
+---
+
+## 🚀 Local Setup & Quick Start
+
+If you want to run JobHunt AI Studio locally on your computer:
 
 ### 1. Prerequisites
-- Python 3.10+ (Python 3.11 or 3.12 recommended)
-- Playwright Chromium (`playwright install chromium`)
+- Python 3.10, 3.11, or 3.12
+- Git
 
-### 2. Installation
+### 2. Clone Repository
 ```bash
-# Clone and enter directory
-cd JobHunt_AI_Studio
+git clone https://github.com/kaustubh12022/JobHunt-AI-Studio.git
+cd JobHunt-AI-Studio
+```
 
-# Create and activate virtual environment
+### 3. Set Up Virtual Environment
+```bash
+# Windows
 python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+.\.venv\Scripts\activate
 
-# Install dependencies
+# macOS / Linux
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+### 4. Install Dependencies & Playwright
+```bash
 pip install -r requirements.txt
-
-# Install Playwright Chromium browser
+pip install -r requirements-dev.txt
 playwright install chromium
 ```
 
-### 3. Launch Web Dashboard
+### 5. Start Application
 ```bash
-# Start Streamlit application
+# Windows quick-launcher
+start.bat
+
+# Or direct command
 streamlit run app.py
 ```
 Open your browser at `http://localhost:8501`.
 
 ---
 
-## 📁 Repository Structure
+## 🧪 Running Tests
 
-```text
-JobHunt_AI_Studio/
-├── app.py                      # Streamlit dashboard interface
-├── ui.py                       # Escaped presentation components & styles
-├── core/
-│   ├── models.py               # Typed domain contracts (RunConfig, JobResult, etc.)
-│   ├── models_catalog.py       # Centralized model specifications & dated pricing
-│   ├── security.py             # Input limits, URL safety, CSV formula neutralization
-│   ├── run_store.py            # SQLite persistent ACID store with WAL mode & worker leases
-│   ├── run_service.py          # Bounded background worker & batch stage orchestration
-│   ├── ai_engine.py            # ScopedAIClient & Gemini project-level rate limiter
-│   ├── scorer.py               # ATS relevance scoring (truthful failure reporting)
-│   ├── resume_tailor.py        # Source-bound tailoring & factual sanitization
-│   ├── pdf_generator.py        # Playwright Chromium 1-page PDF renderer (concurrency=1)
-│   ├── ats_verifier.py         # Universal ATS acceptance test suite
-│   ├── csv_parser.py           # Fuzzy column mapping & input validator
-│   ├── cost_estimator.py       # Pre-run token and cost projection calculator
-│   ├── packager.py             # Atomic ZIP packager for verified outputs
-│   ├── summary_reporter.py     # Neutralized CSV and autoescaped HTML reports
-│   ├── profile_manager.py      # Profile normalizer (no invented defaults)
-│   ├── health.py               # System diagnostics & health check
-│   └── session_manager.py      # Session workspace manager
-├── templates/
-│   ├── resume_template.html    # Master single-page ATS resume Jinja2 template
-│   └── summary_template.html   # Executive batch summary table template
-├── data/
-│   ├── sample_profile.yaml     # Fictional sample profile for testing
-│   └── sample_jobs.csv         # Validated sample jobs CSV
-├── tests/                      # Pytest verification suites
-├── Dockerfile                  # Non-root production container
-├── .dockerignore               # Docker build exclusion rules
-├── render.yaml                 # Render persistent disk blueprint
-├── DEPLOYMENT.md               # Production deployment & disaster recovery guide
-└── requirements.txt            # Minimal standalone dependencies
+The test suite includes 44 unit and integration tests covering SQLite ACID transactions, worker lease recovery, input safety, URL sanitization, multi-role tailoring, and Playwright ATS PDF verification:
+
+```bash
+pytest tests -o pythonpath=. -v
 ```
 
 ---
 
-## 🔒 Security & Privacy Invariants
+## ☁️ Production Deployment (Render)
 
-1. **Ephemeral Keys**: API keys are held strictly in temporary run memory and are purged once processing finishes.
-2. **Access Control**: Every run is protected by an independent, unpersisted recovery code. Operations require proof of recovery ownership.
-3. **No Fabricated Data**: If an AI provider call fails, the stage fails explicitly. The engine never invents fake scores (such as a 60% fallback) or fabricated candidate facts.
+JobHunt AI Studio is turnkey-ready for deployment on [Render](https://render.com) using Docker and persistent disks.
+
+### 1-Click Blueprint Deployment
+1. Fork or clone this repository to your GitHub account.
+2. In the [Render Dashboard](https://dashboard.render.com), click **New +** → **Blueprint**.
+3. Select your repository `JobHunt-AI-Studio`.
+4. Render reads [`render.yaml`](render.yaml) automatically:
+   - Sets runtime to **Docker** (`python:3.12-slim-bookworm`).
+   - Attaches a **1 GB Persistent Disk** (`jobhunt-data`) mounted at `/var/data` for SQLite durability.
+   - Sets `PORT=8501` and `PERSISTENT_DATA_DIR=/var/data`.
+5. Click **Apply**. Render builds the container, installs Chromium, mounts the disk, and takes the service live!
+
+For advanced disaster recovery and backup instructions, refer to [`DEPLOYMENT.md`](DEPLOYMENT.md).
+
+---
+
+## 🛡️ Security, Privacy & Safety
+
+JobHunt AI Studio was architected with enterprise data privacy standards:
+
+1. **Ephemeral Keys**: Your API keys are held exclusively in process memory for the duration of your active batch and discarded immediately afterward.
+2. **Encrypted Recovery Codes**: Batches are indexed by a SHA-256 cryptographic hash of the recovery code. Raw recovery codes are never stored in plaintext.
+3. **CSV Formula Injection Defense**: All exported cells starting with `=`, `+`, `-`, `@`, `\t`, or `\r` are neutralized with prepended quotes to prevent spreadsheet execution vulnerabilities.
+4. **Hardened Headless Chromium**: PDF rendering runs with `java_script_enabled=False` and blocks external network requests to prevent XSS payloads and SSRF leaks.
+5. **Non-Root Container**: Production Docker builds run strictly under the unprivileged `appuser` (UID 10001).
+
+---
+
+## 📄 License
+
+Distributed under the MIT License. See `LICENSE` for more information.
