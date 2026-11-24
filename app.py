@@ -313,8 +313,8 @@ with tab_profile:
             for group, group_skills in structured.items():
                 st.markdown(f"**{group}**")
                 st.markdown(" · ".join(group_skills))
-        with st.expander("Full skill inventory"):
-            st.markdown(" · ".join(profile.get("skills", [])))
+        st.markdown("**Full skill inventory**")
+        st.markdown(" · ".join(profile.get("skills", [])))
 
     with st.expander("Certifications, achievements & languages"):
         for cert in profile.get("certifications", []):

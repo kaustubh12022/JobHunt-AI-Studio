@@ -17,6 +17,10 @@ def button(app, label):
     return next(b for b in app.button if b.label == label)
 
 
+def state_get(app, key, default=None):
+    return app.session_state[key] if key in app.session_state else default
+
+
 @pytest.fixture
 def studio(monkeypatch, tmp_path):
     import core.run_service as service
@@ -228,8 +232,8 @@ def test_sidebar_recovery_lookup_and_run_store_integration(studio, monkeypatch):
     button(app, "Start batch").click().run()
     assert not app.exception
 
-    rec_code = app.session_state.get("current_recovery_code")
-    run_id = app.session_state.get("current_run_id")
+    rec_code = state_get(app, "current_recovery_code")
+    run_id = state_get(app, "current_run_id")
     assert rec_code is not None
     assert run_id is not None
     assert run_store_instance.verify_recovery(run_id, rec_code)
@@ -250,5 +254,5 @@ def test_lock_studio_clears_the_session(studio):
     unlock(app)
     button(app, "Lock studio").click().run()
     assert not app.exception
-    assert not app.session_state.get("owner_unlocked", False)
+    assert not state_get(app, "owner_unlocked", False)
     assert app.title[0].value == "Owner access only"
