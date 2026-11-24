@@ -5,3 +5,11 @@ backgroundColor = "#f8fafc"
 secondaryBackgroundColor = "#ffffff"
 textColor = "#1e293b"
 font = "sans serif"
+
+[server]
+# Matches the parser's hard 5 MB CSV limit, so the uploader never accepts a
+# file the studio would reject afterwards.
+maxUploadSize = 5
+
+[client]
+toolbarMode = "minimal"

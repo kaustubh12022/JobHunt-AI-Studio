@@ -26,26 +26,51 @@ from core.security import (
 
 COLUMN_SYNONYMS = {
     "company": [
-        "company", "company_name", "companyname", "employer", "organization",
-        "org", "firm", "hiring_company", "company_name_raw"
+        "company", "company_name", "companyname", "employer", "employer_name",
+        "organization", "organization_name", "org", "firm", "hiring_company",
+        "hiring_organization", "client", "client_name", "brand", "business",
+        "company_name_raw",
     ],
     "title": [
-        "title", "job_title", "jobtitle", "role", "position",
-        "job_name", "designation", "job_role"
+        "title", "job_title", "jobtitle", "role", "position", "job_name",
+        "designation", "job_role", "position_title", "job_position", "role_name",
+        "posting_title", "job_posting_title", "vacancy", "opening", "job_opening",
     ],
     "jd_text": [
-        "jd_text", "job_description", "jobdescription", "description", "jd",
-        "job_details", "details", "requirements", "responsibilities", "content", "job_summary"
+        "jd_text", "job_description", "jobdescription", "job_description_text",
+        "description", "description_text", "job_posting_description", "jd",
+        "job_details", "details", "requirements", "responsibilities", "content",
+        "job_summary", "about_the_job", "role_description", "what_you_will_do",
     ],
     "url": [
         "url", "job_url", "joburl", "link", "apply_link", "apply_url",
-        "job_link", "posting_url", "href", "source_url"
+        "job_link", "posting_url", "href", "source_url", "external_apply_url",
+        "job_posting_url", "application_url", "direct_apply_link",
     ],
     "company_website": ["company_website", "company_site", "official_website"],
     "location": [
-        "location", "city", "work_mode", "job_location", "place", "state", "country"
+        "location", "city", "work_mode", "job_location", "place", "state",
+        "country", "location_text", "work_location", "office_location",
     ],
 }
+
+
+def detect_delimiter(text: str) -> str:
+    """Picks the delimiter used by the header row of an exported CSV."""
+    header = text.splitlines()[0] if text.splitlines() else ""
+    counts = {candidate: header.count(candidate) for candidate in (",", ";", "\t", "|")}
+    best = max(counts, key=counts.get)
+    return best if counts[best] else ","
+
+
+def decode_csv_bytes(raw: bytes) -> str:
+    """Decodes a CSV export, tolerating Excel/Windows and UTF-8 sources."""
+    for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
 
 
 def strip_html_tags(text: str) -> str:
@@ -63,36 +88,48 @@ def strip_html_tags(text: str) -> str:
 
 def detect_column_mapping(headers: List[str]) -> Dict[str, str]:
     """
-    Maps standard internal keys ('company', 'title', 'jd_text', 'url', 'location')
-    to the actual CSV header names using case-insensitive substring and synonym matching.
-    Detects and flags ambiguous columns.
+    Maps internal keys ('company', 'title', 'jd_text', 'url', 'location',
+    'company_website') onto real CSV headers.
+
+    Exact synonym matches win first. Remaining headers are assigned greedily by
+    how specific the matched synonym is, so a column called "Role Description"
+    fills the description field rather than the job title, and no single column
+    is used twice.
     """
+    normalized: Dict[str, str] = {}
+    for header in headers:
+        if not header:
+            continue
+        norm = re.sub(r"[^a-z0-9_]", "", header.strip().lower().replace(" ", "_"))
+        if norm:
+            normalized.setdefault(norm, header)
+
     mapping: Dict[str, str] = {}
-    normalized_headers = {
-        re.sub(r'[^a-z0-9_]', '', h.strip().lower().replace(" ", "_")): h
-        for h in headers if h
-    }
+    used: set[str] = set()
 
     for standard_key, synonyms in COLUMN_SYNONYMS.items():
-        # 1. Exact match
-        for syn in synonyms:
-            if syn in normalized_headers:
-                mapping[standard_key] = normalized_headers[syn]
+        for synonym in synonyms:
+            if synonym in normalized and normalized[synonym] not in used:
+                mapping[standard_key] = normalized[synonym]
+                used.add(normalized[synonym])
                 break
+
+    candidates: List[tuple[int, int, str, str]] = []
+    for standard_key, synonyms in COLUMN_SYNONYMS.items():
         if standard_key in mapping:
             continue
+        for norm_header, original in normalized.items():
+            if original in used:
+                continue
+            lengths = [len(synonym) for synonym in synonyms if synonym in norm_header]
+            if lengths:
+                candidates.append((max(lengths), -len(norm_header), standard_key, original))
 
-        # 2. Fuzzy substring match
-        matched_candidates = []
-        for norm_h, original_h in normalized_headers.items():
-            if any(syn in norm_h for syn in synonyms):
-                matched_candidates.append(original_h)
-
-        if len(matched_candidates) == 1:
-            mapping[standard_key] = matched_candidates[0]
-        elif len(matched_candidates) > 1:
-            # Ambiguous column headers detected
-            mapping[standard_key] = matched_candidates[0]
+    for _, _, standard_key, original in sorted(candidates, reverse=True):
+        if standard_key in mapping or original in used:
+            continue
+        mapping[standard_key] = original
+        used.add(original)
 
     return mapping
 
@@ -110,35 +147,29 @@ def parse_jobs_csv(
     """
     warnings: List[str] = []
 
-    # 1. Prepare string stream and validate size
-    if isinstance(csv_content_or_file, bytes):
-        if len(csv_content_or_file) > MAX_CSV_BYTES:
-            raise ValueError(f"CSV file size exceeds 5 MB limit ({len(csv_content_or_file)} bytes).")
-        raw_str = csv_content_or_file.decode("utf-8-sig", errors="replace")
-        stream = io.StringIO(raw_str)
-    elif isinstance(csv_content_or_file, io.BytesIO):
-        b = csv_content_or_file.read()
-        if len(b) > MAX_CSV_BYTES:
-            raise ValueError(f"CSV file size exceeds 5 MB limit ({len(b)} bytes).")
-        raw_str = b.decode("utf-8-sig", errors="replace")
-        stream = io.StringIO(raw_str)
+    # 1. Normalise input (bytes, path-free streams or text) and enforce the size cap
+    if isinstance(csv_content_or_file, (bytes, io.BytesIO)):
+        raw = csv_content_or_file if isinstance(csv_content_or_file, bytes) else csv_content_or_file.read()
+        if len(raw) > MAX_CSV_BYTES:
+            raise ValueError(f"CSV file size exceeds 5 MB limit ({len(raw)} bytes).")
+        text = decode_csv_bytes(raw)
     elif isinstance(csv_content_or_file, io.StringIO):
-        raw_str = csv_content_or_file.getvalue()
-        if len(raw_str.encode("utf-8")) > MAX_CSV_BYTES:
+        text = csv_content_or_file.getvalue()
+        if len(text.encode("utf-8")) > MAX_CSV_BYTES:
             raise ValueError("CSV content exceeds 5 MB limit.")
-        stream = csv_content_or_file
     elif isinstance(csv_content_or_file, str):
-        raw_str = csv_content_or_file
-        if len(raw_str.encode("utf-8")) > MAX_CSV_BYTES:
+        text = csv_content_or_file
+        if text.startswith("\ufeff"):
+            text = text[1:]
+        if len(text.encode("utf-8")) > MAX_CSV_BYTES:
             raise ValueError("CSV content exceeds 5 MB limit.")
-        if raw_str.startswith("\ufeff"):
-            raw_str = raw_str[1:]
-        stream = io.StringIO(raw_str)
     else:
         raise ValueError("Unsupported CSV content type.")
 
-    reader = csv.DictReader(stream)
-    headers = reader.fieldnames or []
+    # 2. Exports differ by source: sniff the delimiter instead of assuming commas
+    delimiter = detect_delimiter(text)
+    reader = csv.DictReader(io.StringIO(text, newline=""), delimiter=delimiter, restval="")
+    headers = [header for header in (reader.fieldnames or []) if header and header.strip()]
     if not headers:
         raise ValueError("CSV file has no header row.")
 

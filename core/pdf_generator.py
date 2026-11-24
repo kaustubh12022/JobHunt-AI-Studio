@@ -12,9 +12,11 @@ Includes:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import re
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -31,6 +33,28 @@ logger = logging.getLogger("JobHuntAIStudio")
 # Concurrency constraint: strictly 1 Chromium render at a time to prevent resource contention
 _chromium_semaphore = threading.Semaphore(1)
 _pdf_executor = ThreadPoolExecutor(max_workers=2)
+_policy_lock = threading.Lock()
+
+
+@contextlib.contextmanager
+def _playwright_event_loop():
+    """Makes Playwright work on Windows under Streamlit.
+
+    Streamlit pins the Windows selector event loop for Tornado compatibility, but
+    Playwright launches Chromium as a subprocess, which the selector loop does not
+    support. Rendering briefly switches to the proactor policy and restores it
+    afterwards. Linux and macOS are untouched.
+    """
+    if sys.platform != "win32":
+        yield
+        return
+    with _policy_lock:
+        previous = asyncio.get_event_loop_policy()
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+        try:
+            yield
+        finally:
+            asyncio.set_event_loop_policy(previous)
 
 
 def render_html(tailored_resume: Dict[str, Any], job: Optional[Dict[str, Any]] = None, compact: bool = False) -> str:
@@ -72,7 +96,7 @@ def _render_pdf_sync(
 
     html_content = render_html(tailored_resume, job, compact=False)
 
-    with _chromium_semaphore:
+    with _chromium_semaphore, _playwright_event_loop():
         with sync_playwright() as p:
             browser = p.chromium.launch(
                 args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]

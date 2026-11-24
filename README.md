@@ -5,7 +5,7 @@
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-blue.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![DeepSeek](https://img.shields.io/badge/AI-DeepSeek_V4.1_Flash-4d6bfe)](https://platform.deepseek.com/)
 [![Playwright](https://img.shields.io/badge/PDF-Playwright_Chromium-green.svg?logo=playwright&logoColor=white)](https://playwright.dev/)
-[![Tests](https://img.shields.io/badge/Tests-56_Passed-success.svg)](https://github.com/kaustubh12022/JobHunt-AI-Studio)
+[![Tests](https://img.shields.io/badge/Tests-66_Passed-success.svg)](https://github.com/kaustubh12022/JobHunt-AI-Studio)
 
 **JobHunt AI Studio** is the private, single-owner resume tailoring and batch job-evaluation
 pipeline built for **Kaustubh Kale**. It scores an uploaded batch of job listings against his
@@ -26,14 +26,37 @@ workspace or run data is rendered.
 
 ## 📖 Table of Contents
 1. [Locked by Design](#-locked-by-design)
-2. [Owner Profile](#-owner-profile)
-3. [Pipeline](#-pipeline)
-4. [Jobs CSV Format](#-jobs-csv-format)
-5. [Local Setup](#-local-setup)
-6. [Running Tests](#-running-tests)
-7. [Production Deployment (Render)](#-production-deployment-render)
-8. [Security Model](#-security-model)
-9. [Project Structure](#-project-structure)
+2. [Using the Studio](#-using-the-studio)
+3. [Owner Profile](#-owner-profile)
+4. [Pipeline](#-pipeline)
+5. [Jobs CSV Format](#-jobs-csv-format)
+6. [Local Setup](#-local-setup)
+7. [Running Tests](#-running-tests)
+8. [Production Deployment (Render)](#-production-deployment-render)
+9. [Security Model](#-security-model)
+10. [Project Structure](#-project-structure)
+
+---
+
+## 🖥️ Using the Studio
+
+The interface is one linear flow with four plain screens, built to be driven by a human or
+by an automated browser agent:
+
+| Screen | Heading | You can |
+| :--- | :--- | :--- |
+| Locked | `Owner access only` | Enter the owner passphrase (`Unlock studio`). |
+| Ready | `Upload a jobs CSV` | Upload a CSV (or paste CSV text) and press `Start batch`. |
+| Running | `Batch running` | Watch progress and the activity log, or `Pause batch`. |
+| Done | `Batch complete` | Download the ZIP / summary CSV / HTML report, or `Start a new batch`. |
+
+There are no tabs, sliders, key fields or profile editors. Every screen shows a **STATUS**
+banner (`READY`, `RUNNING`, `PAUSED`, `COMPLETE`, `FAILED`) with machine-readable
+`data-studio-state` / `data-jobs-total` / `data-approved` attributes, plus a JSON snapshot
+panel. Results are rendered as a plain HTML table, so every value is readable from the DOM.
+
+The full automation contract — selectors, labels, CSV variants, timings and a Playwright
+recipe — lives in [`AGENT_GUIDE.md`](AGENT_GUIDE.md).
 
 ---
 
@@ -74,7 +97,8 @@ tailored resume. It contains Kaustubh's real, verified information:
 - **Target roles** — Java Developer, Software Engineer, Backend Developer, Full Stack Developer,
   AI / GenAI Developer
 
-The **Master profile** tab renders all of it read-only and offers a YAML download.
+The **Master profile (read-only)** panel at the bottom of the workspace renders all of it and
+offers a YAML download.
 
 ---
 
@@ -106,15 +130,20 @@ company_name,job_role,job_description,direct_apply_link,location
 
 | Column | Status | Accepted headers |
 | :--- | :---: | :--- |
-| **Company** | Required | `company`, `company_name`, `employer`, `organization` |
-| **Job title** | Required | `title`, `job_title`, `role`, `position`, `designation` |
-| **Description** | Required | `job_description`, `jd_text`, `description`, `content` |
-| **Apply URL** | Optional | `url`, `apply_link`, `apply_url`, `job_link` |
+| **Company** | Required | `company`, `company_name`, `employer`, `organization`, `hiring_organization`, `client`, `brand` |
+| **Job title** | Required | `title`, `job_title`, `role`, `position`, `designation`, `job_posting_title`, `vacancy` |
+| **Description** | Required | `job_description`, `jd_text`, `description`, `content`, `job_summary`, `role_description` |
+| **Apply URL** | Optional | `url`, `apply_link`, `apply_url`, `job_url`, `job_link` |
 | **Company website** | Optional | `company_website`, `official_website` |
-| **Location** | Optional | `location`, `city`, `work_mode` |
+| **Location** | Optional | `location`, `city`, `work_mode`, `work_location` |
 
-Headers are matched case-insensitively with synonym detection. A sample CSV is downloadable
-from the Guide tab and lives at [`data/sample_jobs.csv`](data/sample_jobs.csv).
+Headers are matched case-insensitively with synonym detection, most-specific match first.
+Exports from LinkedIn, Naukri, Indeed or a spreadsheet work as-is: the parser detects the
+delimiter (comma, semicolon, tab, pipe) and the encoding (UTF-8/BOM, Windows-1252, Latin-1).
+
+Limits: 5 MB per file, 100 jobs per batch, 30,000 characters per description, and at least
+50 characters of description per row. A sample CSV is downloadable from the
+**Recovery, runs and lock** panel and lives at [`data/sample_jobs.csv`](data/sample_jobs.csv).
 
 ---
 
@@ -159,7 +188,7 @@ python -c "import secrets; print('jh-'+secrets.token_urlsafe(24))"
 ```bash
 streamlit run app.py
 ```
-Open `http://localhost:8501`, enter the owner passphrase, and use the Workspace tab.
+Open `http://localhost:8501`, enter the owner passphrase, then upload a jobs CSV.
 
 ---
 
@@ -173,7 +202,7 @@ auditing, reviewer parsing, packaging and UI behaviour:
 pytest tests -o pythonpath=. -v
 ```
 
-56 tests, no live provider calls required.
+66 tests, no live provider calls required.
 
 ---
 
@@ -217,8 +246,9 @@ Health check: `GET /_stcore/health` → `ok`. Operational notes live in [`DEPLOY
 ## 🗂️ Project Structure
 
 ```
-app.py                     Locked Streamlit studio (owner gate + workspace)
-ui.py                      Presentation components and design-system helpers
+app.py                     Locked Streamlit studio (owner gate + four screens)
+ui.py                      Status banner, JSON snapshot, plain HTML tables, log console
+AGENT_GUIDE.md             Selectors, labels and Playwright recipe for automation
 core/
   settings.py              Locked identity, engine, policy
   access.py                Owner passphrase gate
@@ -233,8 +263,9 @@ core/
   run_store.py             SQLite runs/jobs/events/artifacts
   packager.py              ZIP bundle builder
   profile_manager.py       Bundled owner profile loader
+  csv_parser.py            Tolerant CSV ingestion (encodings, delimiters, synonyms)
 data/profile.yaml          Kaustubh's locked master profile
-tests/                     56 unit/integration tests
+tests/                     66 unit/integration tests
 Dockerfile · render.yaml   Production container and Render blueprint
 ```
 

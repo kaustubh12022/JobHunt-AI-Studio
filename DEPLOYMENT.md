@@ -69,11 +69,13 @@ starts the service. The first build takes a few minutes.
 1. **Health**: `curl -f https://<service>.onrender.com/_stcore/health` → `ok`
 2. **Gate**: open the URL in a private window — you must see *Owner access only* and no
    profile data. A wrong passphrase must be rejected.
-3. **Unlock**: enter `STUDIO_ACCESS_KEY`; the header must read *Make every application count.*
-   and the sidebar must show *DeepSeek V4.1 Flash* with *credential: configured*.
-4. **Profile**: the Master profile tab must show Kaustubh Kale, 60+ skills and 6 projects.
-5. **Batch**: upload a small CSV (1–2 jobs), start the batch, and confirm the pipeline reaches
-   `BATCH COMPLETE` with an approved PDF and a downloadable ZIP.
+3. **Unlock**: enter `STUDIO_ACCESS_KEY`; the screen must switch to *Upload a jobs CSV* with the
+   engine caption *DeepSeek V4.1 Flash (deepseek-flash)*.
+4. **Profile**: open **Master profile (read-only)** — it must show Kaustubh Kale, 60+ skills and
+   6 projects.
+5. **Batch**: upload a small CSV (1–2 jobs), press `Start batch`, and confirm the screen reaches
+   *Batch complete* with `STATUS COMPLETE`, an approved PDF and a downloadable ZIP.
+   `AGENT_GUIDE.md` contains the same check as a Playwright script.
 
 ---
 
@@ -83,7 +85,9 @@ starts the service. The first build takes a few minutes.
 1. The worker heartbeat renews a 60-second lease every 15 seconds.
 2. On restart, `RunStore.recover_interrupted_runs()` moves orphaned `running` runs to
    `awaiting_credentials`.
-3. Paste the run's recovery code into **Run recovery & lookup** and click **Resume saved batch**.
+3. Paste the run's recovery code into **Recovery, runs and lock → Recovery code**, click
+   **Find run**, then **Load these results**; the batch resumes from its checkpoint when a
+   worker is available.
 
 ### Backup and restore
 ```bash
