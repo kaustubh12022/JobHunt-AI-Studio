@@ -7,7 +7,7 @@ automated browser agent (Playwright / vision) can drive it without guessing:
 
 Every unlocked screen has exactly one ``<h1>``, one primary action, stable
 widget labels and keys, a visible ``STATUS`` word, and a machine-readable
-snapshot (``data-studio-state`` attributes plus the JSON panel).
+status banner (``data-studio-state`` and friends).
 """
 from __future__ import annotations
 
@@ -48,7 +48,6 @@ from ui import (
     counts,
     display_status,
     render_live_log_console,
-    state_json,
     status_banner,
     styles,
     table_html,
@@ -63,44 +62,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 styles()
-
-
-def snapshot(
-    screen: str,
-    status: str,
-    *,
-    jobs_uploaded: int = 0,
-    jobs_total: int = 0,
-    jobs_scored: int = 0,
-    approved: int = 0,
-    attention: int = 0,
-    downloads: dict | None = None,
-    run_id: str | None = None,
-    recovery_code: str | None = None,
-    stage: str | None = None,
-    message: str = "",
-) -> dict:
-    """Builds the canonical machine-readable state for the current screen."""
-    return {
-        "screen": screen,
-        "status": status,
-        "jobs_uploaded": jobs_uploaded,
-        "jobs_total": jobs_total,
-        "jobs_scored": jobs_scored,
-        "approved": approved,
-        "needs_attention": attention,
-        "downloads": downloads or {"zip": False, "summary_csv": False, "html_report": False},
-        "run_id": run_id,
-        "recovery_code": recovery_code,
-        "stage": stage,
-        "message": message,
-    }
-
-
-def render_state_panel() -> None:
-    """Shows the same state as JSON, for agents that prefer text over pixels."""
-    with st.expander("Machine-readable state (JSON)"):
-        st.code(state_json(st.session_state.get("state_snapshot", {})), language="json")
 
 
 # ==========================================
@@ -179,7 +140,6 @@ def clear_results() -> None:
         "pdf_checks",
         "current_run_id",
         "current_recovery_code",
-        "state_snapshot",
         "inspected_run",
         "inspected_code",
         "inspect_job",
@@ -293,7 +253,6 @@ if screen == "ready":
         status_banner("ready", detail, totals={"total": len(parsed_jobs or [])}),
         unsafe_allow_html=True,
     )
-
     if not server_key_ready:
         st.error("DEEPSEEK_API_KEY is not configured on this server. Add it and reload the studio.")
 
@@ -359,13 +318,6 @@ if screen == "ready":
             for warning in warnings:
                 st.text(warning)
 
-    st.session_state["state_snapshot"] = snapshot(
-        "ready",
-        "ready",
-        jobs_uploaded=len(parsed_jobs or []),
-        message=detail,
-    )
-
 # ==========================================
 # SCREEN 2: RUNNING - live progress
 # ==========================================
@@ -394,6 +346,8 @@ elif screen == "running":
                 "scored": scored,
                 "approved": verified,
                 "run_id": run_id,
+                "stage": stage,
+                "recovery_code": recovery_code,
             },
         ),
         unsafe_allow_html=True,
@@ -422,22 +376,9 @@ elif screen == "running":
             unsafe_allow_html=True,
         )
 
-    st.session_state["state_snapshot"] = snapshot(
-        "running",
-        banner_status,
-        jobs_uploaded=total_jobs,
-        jobs_total=total_jobs,
-        jobs_scored=scored,
-        approved=verified,
-        run_id=run_id,
-        recovery_code=recovery_code,
-        stage=stage or None,
-        message=latest,
-    )
     if run_status == "running" and st.button("Pause batch", use_container_width=True, key="pause_batch"):
         run_service.pause_run(run_id, recovery_code)
         st.info("Pause requested. The batch saves its progress and stops after the current step.")
-    render_state_panel()
 
     if is_running:
         time.sleep(2)
@@ -473,6 +414,8 @@ else:
                 "attention": batch_counts["attention"],
                 "zip": downloads["zip"],
                 "run_id": run_id,
+                "stage": "Complete" if not failed else "Interrupted",
+                "recovery_code": recovery_code,
             },
         ),
         unsafe_allow_html=True,
@@ -639,23 +582,8 @@ else:
         clear_results()
         st.rerun()
 
-    st.session_state["state_snapshot"] = snapshot(
-        "complete",
-        "failed" if failed else "complete",
-        jobs_uploaded=batch_counts["processed"],
-        jobs_total=batch_counts["processed"],
-        jobs_scored=batch_counts["processed"],
-        approved=batch_counts["approved"],
-        attention=batch_counts["attention"],
-        downloads=downloads,
-        run_id=run_id,
-        recovery_code=recovery_code,
-        stage="Complete" if not failed else "Interrupted",
-        message=f"{batch_counts['processed']} jobs processed",
-    )
-
 # ==========================================
-# SHARED: machine state + owner utilities
+# SHARED: owner utilities
 # ==========================================
 def render_owner_tools() -> None:
     """Read-only profile, recovery lookup and the lock action."""
@@ -740,4 +668,3 @@ def render_owner_tools() -> None:
 
 if screen in ("ready", "complete"):
     render_owner_tools()
-    render_state_panel()

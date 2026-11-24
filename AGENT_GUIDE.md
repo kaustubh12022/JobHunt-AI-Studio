@@ -38,7 +38,9 @@ Every unlocked screen starts with a status banner:
      data-approved="3"
      data-attention="1"
      data-zip="1"
-     data-run-id="run_9f2c1a4b77de">
+     data-run-id="run_9f2c1a4b77de"
+     data-stage="Complete"
+     data-recovery-code="jh-a1b2-c3d4-e5f6">
   <span class="status-label">STATUS</span>
   <strong class="status-word">COMPLETE</strong>
   <span class="status-detail">4 jobs processed · 3 approved PDFs · 1 need attention</span>
@@ -52,11 +54,12 @@ banner = page.locator("[data-studio-state]").first
 state = banner.get_attribute("data-studio-state")   # ready | running | paused | complete | failed
 approved = int(banner.get_attribute("data-approved") or 0)
 has_zip = banner.get_attribute("data-zip") == "1"
+run_id = banner.get_attribute("data-run-id")
+code = banner.get_attribute("data-recovery-code")   # keep it to resume later
 ```
 
-The same data is printed as JSON in the **Machine-readable state (JSON)** panel at the
-bottom of the ready / running / complete screens, if you prefer text extraction over
-attributes.
+All values come from the same element on every screen, so no text extraction or layout
+guessing is required.
 
 ---
 

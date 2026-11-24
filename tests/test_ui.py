@@ -14,7 +14,7 @@ from streamlit.testing.v1 import AppTest
 
 from core.profile_manager import load_owner_profile
 from core.session_manager import SessionManager
-from ui import counts, display_status, filter_results, state_json, status_banner
+from ui import counts, display_status, filter_results, status_banner
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -25,6 +25,11 @@ def button(app, label):
 
 def state_get(app, key, default=None):
     return app.session_state[key] if key in app.session_state else default
+
+
+def banners(app):
+    """All rendered HTML, so tests can read the machine-readable status block."""
+    return "\n".join(str(getattr(element, "value", "")) for element in app.markdown)
 
 
 def run_batch(app, timeout=60):
@@ -139,9 +144,9 @@ def test_upload_screen_requires_a_readable_csv(studio):
     unlock(app)
     assert not app.exception
     assert app.title[0].value == "Upload a jobs CSV"
-    assert state_get(app, "state_snapshot")["status"] == "ready"
+    assert 'data-studio-state="ready"' in banners(app)
 
-    run_batch(app)
+    button(app, "Start batch").click().run()
     assert any("Upload a jobs CSV first" in x.value for x in app.error)
 
     state["csv"] = "wrong,headers\na,b\n"
@@ -153,7 +158,7 @@ def test_upload_screen_requires_a_readable_csv(studio):
     state["csv"] = generate_sample_csv_str()
     app.run()
     assert any("3 jobs loaded" in x.value for x in app.success)
-    assert state_get(app, "state_snapshot")["jobs_uploaded"] == 3
+    assert 'data-jobs-total="3"' in banners(app)
 
 
 def test_profile_is_bundled_locked_and_not_editable(studio):
@@ -197,10 +202,10 @@ def test_batch_runs_and_results_are_ready_to_download(studio, monkeypatch):
     assert app.title[0].value == "Batch complete"
     assert counts(app.session_state["batch_results"])["generated"] == 2
     assert app.session_state["zip_bytes"].startswith(b"PK")
-    snapshot = app.session_state["state_snapshot"]
-    assert snapshot["status"] == "complete"
-    assert snapshot["approved"] == 2
-    assert snapshot["downloads"]["zip"] is True
+    html = banners(app)
+    assert 'data-studio-state="complete"' in html
+    assert 'data-approved="2"' in html
+    assert 'data-zip="1"' in html
     assert any(metric.label == "Jobs processed" for metric in app.metric)
 
     # The results table stays on screen and one job can be inspected.
@@ -223,7 +228,7 @@ def test_processing_error_state(studio, monkeypatch):
     assert not app.exception
     assert app.title[0].value == "Batch failed"
     assert any("Batch interrupted" in x.value for x in app.error)
-    assert app.session_state["state_snapshot"]["status"] == "failed"
+    assert 'data-studio-state="failed"' in banners(app)
     assert any(b.label == "Resume batch" for b in app.button)
 
 
@@ -277,25 +282,31 @@ def test_lock_studio_clears_the_session(studio):
     assert app.title[0].value == "Owner access only"
 
 
-def test_status_banner_and_snapshot_are_machine_readable():
+def test_status_banner_is_machine_readable():
     banner = status_banner(
         "running",
-        '3 of 9 jobs scored Â· <script>bad()</script>',
-        totals={"total": 9, "scored": 3, "approved": 1, "zip": True, "run_id": "run_demo"},
+        '3 of 9 jobs scored - <script>bad()</script>',
+        totals={
+            "total": 9,
+            "scored": 3,
+            "approved": 1,
+            "zip": True,
+            "run_id": "run_demo",
+            "stage": "Tailor",
+            "recovery_code": "jh-demo-0000-0000",
+        },
     )
     assert 'data-studio-state="running"' in banner
     assert 'data-jobs-total="9"' in banner
     assert 'data-jobs-scored="3"' in banner
+    assert 'data-approved="1"' in banner
     assert 'data-zip="1"' in banner
     assert 'data-run-id="run_demo"' in banner
+    assert 'data-stage="Tailor"' in banner
+    assert 'data-recovery-code="jh-demo-0000-0000"' in banner
     assert "RUNNING" in banner
     assert "<script>" not in banner
     assert "&lt;script&gt;" in banner
-
-    payload = state_json({"status": "complete", "downloads": {"zip": True}})
-    import json
-
-    assert json.loads(payload)["downloads"]["zip"] is True
 
 
 def test_result_groups_and_filters():
@@ -309,4 +320,5 @@ def test_result_groups_and_filters():
     assert len(filter_results(results, "Below Threshold")) == 1
     assert filter_results(results) == results
     assert display_status(results[0]) == "Render Error"
+
 

@@ -6,14 +6,13 @@ usable both by a human and by an automated browser agent (Playwright / vision).
 """
 from __future__ import annotations
 
-import json
 from html import escape
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 import streamlit as st
 
-# Fixed status vocabulary shared by the banner, the JSON snapshot and the docs.
+# Fixed status vocabulary shared by the banner and the documentation.
 STATUS_READY = "ready"
 STATUS_RUNNING = "running"
 STATUS_PAUSED = "paused"
@@ -45,9 +44,9 @@ def status_banner(
     """Renders the single status block agents read first.
 
     The visible word (READY / RUNNING / COMPLETE / ...) is repeated in the
-    ``data-studio-state`` attribute, and the counters are exposed as
-    ``data-*`` attributes, so a browser agent can read the state without
-    screenshotting or guessing at layout.
+    ``data-studio-state`` attribute, and the counters, stage and recovery code
+    are exposed as ``data-*`` attributes, so a browser agent can read the state
+    without screenshotting or guessing at layout.
     """
     word = STATUS_WORDS.get(status, STATUS_WORDS[STATUS_READY])
     counters = totals or {}
@@ -59,6 +58,8 @@ def status_banner(
         "data-attention": counters.get("attention", 0),
         "data-zip": 1 if counters.get("zip") else 0,
         "data-run-id": counters.get("run_id", "") or "",
+        "data-stage": counters.get("stage", "") or "",
+        "data-recovery-code": counters.get("recovery_code", "") or "",
     }
     attr_html = " ".join(f'{name}="{escape(str(value))}"' for name, value in attrs.items())
     return (
@@ -68,11 +69,6 @@ def status_banner(
         f'<span class="status-detail">{escape(str(detail))}</span>'
         f"</div>"
     )
-
-
-def state_json(snapshot: Dict[str, Any]) -> str:
-    """Serializes the studio state for the machine-readable panel."""
-    return json.dumps(snapshot, indent=2, ensure_ascii=False, default=str)
 
 
 def result_group(result: Dict[str, Any]) -> str:

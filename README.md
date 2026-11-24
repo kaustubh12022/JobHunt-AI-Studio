@@ -52,8 +52,9 @@ by an automated browser agent:
 
 There are no tabs, sliders, key fields or profile editors. Every screen shows a **STATUS**
 banner (`READY`, `RUNNING`, `PAUSED`, `COMPLETE`, `FAILED`) with machine-readable
-`data-studio-state` / `data-jobs-total` / `data-approved` attributes, plus a JSON snapshot
-panel. Results are rendered as a plain HTML table, so every value is readable from the DOM.
+`data-studio-state`, `data-jobs-total`, `data-approved`, `data-zip`, `data-stage` and
+`data-recovery-code` attributes. Results are rendered as a plain HTML table, so every value
+is readable from the DOM.
 
 The full automation contract — selectors, labels, CSV variants, timings and a Playwright
 recipe — lives in [`AGENT_GUIDE.md`](AGENT_GUIDE.md).
@@ -247,7 +248,7 @@ Health check: `GET /_stcore/health` → `ok`. Operational notes live in [`DEPLOY
 
 ```
 app.py                     Locked Streamlit studio (owner gate + four screens)
-ui.py                      Status banner, JSON snapshot, plain HTML tables, log console
+ui.py                      Status banner, plain HTML tables, activity log
 AGENT_GUIDE.md             Selectors, labels and Playwright recipe for automation
 core/
   settings.py              Locked identity, engine, policy
