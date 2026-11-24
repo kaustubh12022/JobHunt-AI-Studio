@@ -38,8 +38,8 @@ def test_run_creation_and_recovery_verification(tmp_store):
 
     config = RunConfig(
         run_id="run_test_001",
-        provider="gemini",
-        model="gemini-3.5-flash-lite",
+        provider="deepseek",
+        model="deepseek-flash",
         score_threshold=75,
         max_resumes=10,
     )
@@ -48,7 +48,7 @@ def test_run_creation_and_recovery_verification(tmp_store):
         JobInput(job_id="j1", company="Acme", title="Engineer", jd_text="Software engineering with Python."),
         JobInput(job_id="j2", company="Beta", title="Developer", jd_text="Fullstack developer with React."),
     ]
-    fingerprint = compute_input_fingerprint([j.to_dict() for j in jobs], profile, 75, 10, "gemini-3.5-flash-lite")
+    fingerprint = compute_input_fingerprint([j.to_dict() for j in jobs], profile, 75, 10, "deepseek-flash")
 
     run_id = tmp_store.create_run(
         config=config,
@@ -77,7 +77,7 @@ def test_run_creation_and_recovery_verification(tmp_store):
 def test_worker_lease_acquisition_and_mutual_exclusion(tmp_store):
     """Verify that only one worker can hold an active lease at a time."""
     plain_code = generate_recovery_code()
-    config = RunConfig(run_id="run_lease_test", provider="gemini", model="gemini-3.5-flash-lite")
+    config = RunConfig(run_id="run_lease_test", provider="deepseek", model="deepseek-flash")
     jobs = [JobInput(job_id="j1", company="Acme", title="Dev", jd_text="Code code code.")]
     tmp_store.create_run(
         config=config,
@@ -110,7 +110,7 @@ def test_server_restart_recovery_transitions_orphaned_runs(tmp_store):
     must transition to 'awaiting_credentials' so the user can supply keys and resume.
     """
     plain_code = generate_recovery_code()
-    config = RunConfig(run_id="run_interrupted", provider="gemini", model="gemini-3.5-flash-lite")
+    config = RunConfig(run_id="run_interrupted", provider="deepseek", model="deepseek-flash")
     jobs = [JobInput(job_id="j1", company="Acme", title="Dev", jd_text="Code.")]
     tmp_store.create_run(
         config=config,
@@ -137,7 +137,7 @@ def test_server_restart_recovery_transitions_orphaned_runs(tmp_store):
 def test_stage_checkpoints_and_completed_results(tmp_store):
     """Verify transactional saving and retrieval of job stage results."""
     plain_code = generate_recovery_code()
-    config = RunConfig(run_id="run_checkpoints", provider="gemini", model="gemini-3.5-flash-lite")
+    config = RunConfig(run_id="run_checkpoints", provider="deepseek", model="deepseek-flash", reviewer_model=None)
     jobs = [
         JobInput(job_id="j1", company="Acme", title="Engineer", jd_text="Python coding."),
         JobInput(job_id="j2", company="Beta", title="Analyst", jd_text="SQL data analytics."),
@@ -177,7 +177,7 @@ def test_stage_checkpoints_and_completed_results(tmp_store):
 def test_delete_run_purges_state_and_artifacts(tmp_store):
     """Verify that deleting a run purges both database rows and disk files."""
     plain_code = generate_recovery_code()
-    config = RunConfig(run_id="run_to_delete", provider="gemini", model="gemini-3.5-flash-lite")
+    config = RunConfig(run_id="run_to_delete", provider="deepseek", model="deepseek-flash")
     jobs = [JobInput(job_id="j1", company="Acme", title="Dev", jd_text="Code.")]
     tmp_store.create_run(
         config=config,

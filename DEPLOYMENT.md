@@ -1,88 +1,111 @@
-# 🌐 JobHunt AI Studio — Production Deployment Guide
+# JobHunt AI Studio — Private Deployment Guide
 
-This guide details deploying **JobHunt AI Studio** to [Render](https://render.com) using Docker with persistent disk storage for state durability across deploys and container restarts.
-
----
-
-## 1. Architectural Highlights & Deployment Model
-
-- **Runtime**: Docker (`python:3.12-slim`) with non-root security (`appuser`).
-- **Persistent Storage**: Render Persistent Disk mounted at `/var/data` preserving SQLite run metadata (`jobhunt_studio.db`) and verified PDF resume artifacts (`/var/data/runs/`).
-- **Single-Instance Constraint**: Render persistent disks are mounted to a single instance (`numInstances: 1`). Horizontal multi-container scaling requires migrating the database to managed PostgreSQL and object storage (e.g. S3/R2).
-- **Ephemeral Credentials**: User API keys are stored in run-scoped memory only and never written to disk, database, or shared caches.
-- **Restart Recovery**: When the server restarts or container updates, active runs transition into `awaiting_credentials`. Users supply their private recovery code and API key to resume without losing prior work.
-- **Automated Lifecycle**: Inactive runs expire after 24 hours. Completed runs are purged by the background janitor, preserving storage.
+This guide covers deploying the locked, single-owner studio to
+[Render](https://render.com) with Docker and a persistent disk.
 
 ---
 
-## 2. Step-by-Step Deployment on Render
+## 1. Deployment model
 
-### Step 1: Push Code to GitHub / GitLab
-Ensure your repository contains `Dockerfile`, `render.yaml`, and `.dockerignore`.
+- **Runtime**: Docker (`python:3.12-slim-bookworm`), non-root `appuser` (UID 10001).
+- **Persistent storage**: Render disk mounted at `/var/data`, holding the SQLite run store
+  (`jobhunt_studio.db`) and verified PDF artifacts (`/var/data/runs/`).
+- **Single instance**: a persistent disk is mounted to one instance (`numInstances: 1`).
+- **Server-owned secrets**: `DEEPSEEK_API_KEY` and `STUDIO_ACCESS_KEY` are Render environment
+  variables. They are never committed, baked into the image, or entered by visitors.
+- **Restart recovery**: an interrupted run is recovered as `awaiting_credentials`; the owner
+  resumes it with the run's 12-character recovery code. No key re-entry is needed because the
+  key belongs to the server.
+- **Lifecycle**: inactive runs expire after 24 hours and are purged by the janitor.
+
+---
+
+## 2. Deploy on Render
+
+### Step 1: Push the code
 ```bash
 git add .
-git commit -m "feat: JobHunt AI Studio production release"
+git commit -m "feat: lock studio to owner and DeepSeek-only engine"
 git push origin main
 ```
 
-### Step 2: Create Web Service on Render
-1. Log in to [Render Dashboard](https://dashboard.render.com).
-2. Click **New +** $\rightarrow$ **Web Service**.
-3. Select your repository.
-4. Render detects the `Dockerfile` and `render.yaml`:
-   - **Environment**: Docker
-   - **Plan**: Standard or Starter (at least 1 GB RAM recommended for Playwright Chromium)
-   - **Region**: Oregon or Frankfurt
-   - **Branch**: `main`
+### Step 2: Create the Blueprint
+1. Open the [Render Dashboard](https://dashboard.render.com).
+2. Click **New +** → **Blueprint** and select `kaustubh12022/JobHunt-AI-Studio`.
+3. Render reads [`render.yaml`](render.yaml): Docker runtime, `standard` plan, Oregon region,
+   1 GB disk at `/var/data`, health check `/_stcore/health`, auto-deploy on `main`.
 
-### Step 3: Attach Persistent Disk
-In the Web Service settings under **Disks**:
-- **Disk Name**: `jobhunt-data`
-- **Mount Path**: `/var/data`
-- **Size**: `1 GB` (or larger depending on expected volume)
+### Step 3: Set the secrets
+In the service's **Environment** tab:
 
-### Step 4: Environment Variables
-Configure the following in the Render dashboard:
-- `PORT`: `8501`
-- `PERSISTENT_DATA_DIR`: `/var/data`
+| Key | Value |
+| :--- | :--- |
+| `DEEPSEEK_API_KEY` | Your DeepSeek API key (`sk-...`) |
+| `STUDIO_ACCESS_KEY` | A long random owner passphrase (≥ 12 characters) |
+| `DEEPSEEK_INPUT_PER_M` *(optional)* | Input USD per 1M tokens, if you want priced estimates |
+| `DEEPSEEK_OUTPUT_PER_M` *(optional)* | Output USD per 1M tokens, if you want priced estimates |
 
-*(Do NOT set API keys in Render environment variables; visitors supply their own keys in their browser session).*
+Generate a passphrase locally:
+```bash
+python -c "import secrets; print('jh-'+secrets.token_urlsafe(24))"
+```
 
-### Step 5: Deploy
-Click **Create Web Service**. Render builds the image, installs Playwright Chromium, mounts the persistent disk, and launches the service.
+> These values are stored only in Render's environment. Never commit them to `.env.example`,
+> the README, or the repository.
 
----
-
-## 3. Operations, Maintenance & Disaster Recovery
-
-### Server Restart & Crash Recovery
-1. If the host container restarts while a batch is in progress, the worker lease expires.
-2. Upon restart, `RunStore.recover_interrupted_runs()` transitions uncompleted runs to `awaiting_credentials`.
-3. The user enters their 12-character recovery code (e.g. `jh-a1b2-c3d4-e5f6`) and re-enters their API key in the studio interface to resume processing right where it left off.
-
-### Backup & Restore Procedure
-- **Backup**:
-  SSH or use Render Shell to create a tarball of the persistent disk:
-  ```bash
-  tar -czf /var/data/backup_$(date +%Y%m%d).tar.gz /var/data/jobhunt_studio.db /var/data/runs/
-  ```
-- **Restore**:
-  Extract the archive back into `/var/data`:
-  ```bash
-  tar -xzf /var/data/backup_YYYYMMDD.tar.gz -C /
-  ```
-
-### Rollback Instructions
-If a new release encounters issues:
-1. In the Render Dashboard, go to **Deploys**.
-2. Locate the previous successful build.
-3. Click **Rollback to this deploy**. The previous Docker image will be restored with the persistent disk intact.
+### Step 4: Deploy
+Click **Apply**. Render builds the image, installs Playwright Chromium, mounts the disk and
+starts the service. The first build takes a few minutes.
 
 ---
 
-## 4. Verification & Testing
+## 3. Verify a deployment
 
-Every deployed build should verify:
-1. Health check returns healthy: `curl -f http://<app-domain>/_stcore/health`
-2. Non-root user permissions permit writing to `/var/data`
-3. Single-page PDF generation passes the universal ATS verification suite.
+1. **Health**: `curl -f https://<service>.onrender.com/_stcore/health` → `ok`
+2. **Gate**: open the URL in a private window — you must see *Owner access only* and no
+   profile data. A wrong passphrase must be rejected.
+3. **Unlock**: enter `STUDIO_ACCESS_KEY`; the header must read *Make every application count.*
+   and the sidebar must show *DeepSeek V4.1 Flash* with *credential: configured*.
+4. **Profile**: the Master profile tab must show Kaustubh Kale, 60+ skills and 6 projects.
+5. **Batch**: upload a small CSV (1–2 jobs), start the batch, and confirm the pipeline reaches
+   `BATCH COMPLETE` with an approved PDF and a downloadable ZIP.
+
+---
+
+## 4. Operations
+
+### Restart and crash recovery
+1. The worker heartbeat renews a 60-second lease every 15 seconds.
+2. On restart, `RunStore.recover_interrupted_runs()` moves orphaned `running` runs to
+   `awaiting_credentials`.
+3. Paste the run's recovery code into **Run recovery & lookup** and click **Resume saved batch**.
+
+### Backup and restore
+```bash
+# Backup on the Render Shell
+tar -czf /var/data/backup_$(date +%Y%m%d).tar.gz \
+  /var/data/jobhunt_studio.db /var/data/runs/
+
+# Restore
+tar -xzf /var/data/backup_YYYYMMDD.tar.gz -C /
+```
+
+### Rollback
+In Render → **Deploys**, select the previous successful deploy → **Rollback to this deploy**.
+The persistent disk is preserved.
+
+### Rotating secrets
+Update `DEEPSEEK_API_KEY` or `STUDIO_ACCESS_KEY` in the Environment tab and save. Render
+restarts the service automatically; active runs keep their checkpoints.
+
+---
+
+## 5. Troubleshooting
+
+| Symptom | Cause | Fix |
+| :--- | :--- | :--- |
+| **Studio locked** page | `STUDIO_ACCESS_KEY` missing or < 12 chars | Set the variable and redeploy |
+| *DeepSeek credential missing* warning | `DEEPSEEK_API_KEY` not set | Set the variable and redeploy |
+| Batch pauses as `awaiting_credentials` | Key rejected (401/402/403) or balance exhausted | Update `DEEPSEEK_API_KEY`, resume the batch |
+| `429` / temporary failures | Provider throttling | The client retries automatically; otherwise resume the batch |
+| PDF engine unavailable in health | Chromium missing | Rebuild the image (`playwright install --with-deps chromium`) |

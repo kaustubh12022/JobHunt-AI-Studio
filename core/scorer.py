@@ -1,8 +1,8 @@
 """
 JobHunt AI Studio - AI Relevance Scorer
-Scores incoming job descriptions against candidate master profiles with zero invented fallback scores.
-Sends full, complete job descriptions as-is to preserve all context, nuances, and technical criteria.
-Supports general candidate profiles without hard-coding entry-level/fresher assumptions.
+Scores incoming job descriptions against Kaustubh's master profile with zero
+invented fallback scores. Sends the full, complete job description to preserve
+technical criteria and nuance.
 """
 
 from __future__ import annotations
@@ -11,22 +11,23 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
-from core.ai_engine import ai_engine_instance
+from core.ai_errors import CredentialsRequired, RunPaused
+from core.ai_engine import default_client
 
 logger = logging.getLogger("JobHuntAIStudio")
 
 
 def build_scoring_system_prompt(profile: Dict[str, Any]) -> str:
-    """Builds the ATS scoring system prompt dynamically bound to the candidate's master profile."""
+    """Builds the ATS scoring system prompt bound to the owner's master profile."""
     p_info = profile.get("personal_information", {})
     name = f"{p_info.get('name', '')} {p_info.get('surname', '')}".strip() or "Candidate"
 
-    # Determine candidate seniority level from profile facts
     experiences = profile.get("experience_details", [])
-    num_exps = len(experiences)
-    is_fresher = (num_exps == 0)
-
-    level_desc = "entry-level candidate" if is_fresher else f"candidate with {num_exps} recorded professional role(s)"
+    level_desc = (
+        "entry-level candidate"
+        if not experiences
+        else f"candidate with {len(experiences)} recorded professional role(s)"
+    )
 
     profile_summary_json = json.dumps({
         "name": name,
@@ -37,9 +38,7 @@ def build_scoring_system_prompt(profile: Dict[str, Any]) -> str:
             for p in profile.get("projects", [])
         ],
         "skills": profile.get("skills", []),
-        "target_roles": profile.get("target_roles", [
-            "Software Engineer", "Full Stack Developer", "Backend Developer"
-        ]),
+        "target_roles": profile.get("target_roles", []),
     }, indent=2)
 
     prompt = f"""You are a precise ATS scoring engine evaluating candidates against job requirements for a {level_desc}.
@@ -76,15 +75,11 @@ CRITICAL: Return RAW JSON ONLY. No markdown wrappers or explanation."""
 async def score_job_async(
     job: Dict[str, Any],
     profile: Dict[str, Any],
-    model: Optional[str] = None,
-    provider: Optional[str] = None,
-    api_keys: Optional[List[str]] = None,
     ai_client: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
-    Scores a single job against candidate profile using complete, unstripped JD.
-    Validates typed scoring outputs. If AI scoring fails, flags as failed stage
-    without inventing fabricated scores or fallback matches.
+    Scores a single job against the owner profile using the complete, unstripped JD.
+    A provider failure is reported as a failed stage; no fabricated score is created.
     """
     full_jd = (job.get("jd_text") or "").strip()
     system_prompt = build_scoring_system_prompt(profile)
@@ -97,28 +92,17 @@ Full Job Description:
 {full_jd}"""
 
     try:
-        if ai_client is not None:
-            raw_json, prompt_tok, comp_tok = await ai_client.call_llm(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                temperature=0.2,
-                thinking=False,
-            )
-        else:
-            raw_json = await ai_engine_instance.call_llm(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                model=model,
-                provider=provider,
-                temperature=0.2,
-                thinking=False,
-                api_keys=api_keys,
-            )
-            prompt_tok, comp_tok = 0, 0
+        client = ai_client or default_client()
+        raw_json, prompt_tok, comp_tok = await client.call_llm(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=0.2,
+            thinking=False,
+        )
 
         data = json.loads(raw_json)
         if not isinstance(data, dict) or "match_score" not in data:
-            raise ValueError(f"Invalid scoring response schema from LLM: {raw_json[:120]}")
+            raise ValueError(f"Invalid scoring response schema from DeepSeek: {raw_json[:120]}")
 
         match_score = int(data.get("match_score", 0))
         match_score = max(0, min(100, match_score))
@@ -135,6 +119,8 @@ Full Job Description:
             "prompt_tokens": prompt_tok,
             "completion_tokens": comp_tok,
         }
+    except (CredentialsRequired, RunPaused):
+        raise
     except Exception as e:
         err_lower = str(e).lower()
         if (
@@ -143,10 +129,9 @@ Full Job Description:
             or "unauthorized" in err_lower
             or "please pass a valid api key" in err_lower
         ):
-            # Fatal credential error: do not swallow, halt batch so user sees error immediately
+            # Fatal credential error: do not swallow, halt the batch so the owner sees it.
             raise
         logger.error(f"Error scoring job {job.get('company')} - {job.get('title')}: {e}")
-        # Mark as failed stage without inventing scores or matches
         return {
             **job,
             "match_score": 0,

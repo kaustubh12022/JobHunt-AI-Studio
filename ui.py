@@ -10,7 +10,7 @@ import streamlit as st
 # Backward-compatible stage identifiers for existing test suites
 STAGES = ("Scoring", "Tailoring", "PDF generation", "Packaging")
 # Visual 6-badge pipeline sequence specified for the live workspace
-PIPELINE_BADGES = ("Validate", "Score", "Tailor", "Render", "Check", "Package")
+PIPELINE_BADGES = ("Validate", "Score", "Research", "Tailor", "Render", "Challenge", "Package")
 
 
 def styles() -> None:
@@ -53,15 +53,18 @@ def candidate_card(profile: Dict[str, Any]) -> str:
 def result_group(result: Dict[str, Any]) -> str:
     """Classifies a job result into a clean display status group."""
     status = str(result.get("status", "")).lower()
-    if "error" in status or "fail" in status or result.get("scoring_status") == "fallback":
+    if ("error" in status or "fail" in status or result.get("review_status") == "Needs manual review"
+            or result.get("scoring_status") in ("failed", "fallback")):
         return "Needs attention"
+    if result.get("review_status") == "Approved":
+        return "Approved"
     return "PDF generated" if result.get("pdf_path") else "Skipped"
 
 
 def display_status(result: Dict[str, Any]) -> str:
     """Returns human-readable status text for table presentation."""
     if result.get("status") == "Tailored & Verified":
-        return "PDF generated" if result_group(result) != "Needs attention" else "PDF generated · scoring fallback"
+        return "Unreviewed PDF" if result_group(result) != "Needs attention" else "PDF generated · scoring fallback"
     return str(result.get("status", "Evaluated"))
 
 
@@ -95,31 +98,18 @@ def _badge_state(
     clean_stage = str(stage or "").strip().lower()
 
     if complete:
-        if badge_name in ("Tailor", "Render", "Check") and not attempted_pdf:
+        if badge_name in ("Research", "Tailor", "Render", "Challenge") and not attempted_pdf:
             return "skipped"
         return "done"
 
-    # Map current active stage
-    is_active = False
-    is_done = False
-
-    if clean_stage in ("validate", "validation"):
-        is_active = badge_name == "Validate"
-    elif clean_stage in ("scoring", "score"):
-        is_active = badge_name == "Score"
-        is_done = badge_name == "Validate"
-    elif clean_stage in ("tailoring", "tailor"):
-        is_active = badge_name == "Tailor"
-        is_done = badge_name in ("Validate", "Score")
-    elif clean_stage in ("pdf generation", "render"):
-        is_active = badge_name == "Render"
-        is_done = badge_name in ("Validate", "Score", "Tailor")
-    elif clean_stage in ("check", "audit", "ats check"):
-        is_active = badge_name == "Check"
-        is_done = badge_name in ("Validate", "Score", "Tailor", "Render")
-    elif clean_stage in ("packaging", "package"):
-        is_active = badge_name == "Package"
-        is_done = badge_name in ("Validate", "Score", "Tailor", "Render", "Check")
+    current = {
+        "validation": "validate", "scoring": "score", "tailoring": "tailor",
+        "pdf generation": "render", "check": "challenge", "audit": "challenge",
+        "ats check": "challenge", "revise": "tailor", "packaging": "package",
+    }.get(clean_stage, clean_stage)
+    order = [name.lower() for name in PIPELINE_BADGES]
+    is_active = badge_name.lower() == current
+    is_done = current in order and order.index(badge_name.lower()) < order.index(current)
 
     if failed and is_active:
         return "failed"
@@ -147,7 +137,7 @@ def pipeline_html(
     Maintains full backward-compatibility with existing test suites.
     """
     attempted_pdf = any(
-        r.get("pdf_path") or "render error" in str(r.get("status", "")).lower()
+        r.get("pdf_path") or r.get("draft_path") or "render error" in str(r.get("status", "")).lower()
         for r in results
     )
 
@@ -210,7 +200,7 @@ def filter_results(
     for r in results:
         r_grp = result_group(r)
         if group != "All jobs":
-            if group in ("PDF generated", "Tailored & Verified") and r_grp != "PDF generated":
+            if group in ("PDF generated", "Tailored & Verified") and r_grp not in ("PDF generated", "Approved"):
                 continue
             elif group in ("Skipped", "Below Threshold") and r_grp != "Skipped":
                 continue

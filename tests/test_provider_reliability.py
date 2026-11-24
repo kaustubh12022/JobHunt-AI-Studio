@@ -1,80 +1,64 @@
 """
-Verification Suite: Provider Reliability, Model Validation & Failure Correctness.
+Verification Suite: DeepSeek Provider, Locked Model Catalog & Failure Correctness.
 Tests:
-- Strict model catalog validation forbidding silent model substitution
-- Handling of AI failures: no fabricated 60% fallback scores or silent master profile fallbacks
-- ScopedAIClient isolation: process-wide environment variables remain unaffected
-- Cost estimator accuracy with dated pricing and handling of unknown models
-- Rate limiter cooldown preservation
+- Strict DeepSeek-only model catalog forbidding silent substitution
+- Truthful scoring/tailoring failures (no fabricated scores or silent fallbacks)
+- Token estimation with and without operator-supplied pricing
+- Credential isolation and actionable 401 handling
+- Bounded retry of transient provider errors
 """
 
+import asyncio
 import os
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import pytest
-from core.ai_engine import ScopedAIClient, extract_json_str
+import core.ai_engine as engine
+from core.ai_errors import CredentialsRequired
 from core.cost_estimator import estimate_batch_cost
 from core.models_catalog import validate_model, get_supported_models, normalize_provider_name
-from core.scorer import score_job_async
 from core.resume_tailor import tailor_resume_async
+from core.scorer import score_job_async
 
 
-def test_model_catalog_strict_validation():
-    """Verify that unsupported models raise ValueError and prevent silent substitution."""
-    # Valid models
-    assert validate_model("gemini", "gemini-3.5-flash-lite") == "gemini-3.5-flash-lite"
-    assert validate_model("deepseek", "deepseek-chat") == "deepseek-chat"
-    assert validate_model("openai", "gpt-4o-mini") == "gpt-4o-mini"
+def test_model_catalog_is_locked_to_deepseek():
+    assert normalize_provider_name("deepseek") == "deepseek"
+    assert validate_model("deepseek", "deepseek-flash") == "deepseek-flash"
+    assert validate_model("deepseek", "") == "deepseek-flash"
+    assert get_supported_models("deepseek") == ["deepseek-flash"]
 
-    # Default model resolution when model is empty
-    assert validate_model("gemini", "") == "gemini-3.5-flash-lite"
-    assert validate_model("deepseek", None) == "deepseek-chat"
-
-    # Invalid models MUST raise ValueError
+    with pytest.raises(ValueError, match="locked to DeepSeek"):
+        normalize_provider_name("gemini")
+    with pytest.raises(ValueError, match="locked to DeepSeek"):
+        normalize_provider_name("openai")
     with pytest.raises(ValueError) as exc:
-        validate_model("gemini", "invented-gemini-model-999")
+        validate_model("deepseek", "gemini-3.5-flash-lite")
     assert "Invalid model" in str(exc.value)
     assert "Silent model substitution is disabled" in str(exc.value)
 
-    # Provider mismatch MUST raise ValueError
-    with pytest.raises(ValueError) as exc:
-        validate_model("gemini", "gpt-4o-mini")
-    assert "belongs to provider 'openai'" in str(exc.value)
-
 
 def test_ai_scoring_failure_reports_failed_stage_truthfully():
-    """Verify that an AI failure during scoring results in a failed stage, NOT a fake 60% score."""
-    job = {
-        "job_id": "j_fail",
-        "company": "Acme",
-        "title": "Engineer",
-        "jd_text": "Need python dev.",
-    }
+    job = {"job_id": "j_fail", "company": "Acme", "title": "Engineer", "jd_text": "Need python dev."}
     profile = {"personal_information": {"name": "Test"}}
 
-    # Mock an error from LLM
     mock_client = AsyncMock()
     mock_client.call_llm.side_effect = RuntimeError("API connection timeout")
 
-    import asyncio
     scored = asyncio.run(score_job_async(job, profile, ai_client=mock_client))
-
-    # Truthful failure reporting
     assert scored["scoring_status"] == "failed"
     assert scored["match_score"] == 0
     assert "Scoring failed" in scored["reason"]
     assert "Scoring Error" in scored["status"]
-    # Verify no fabricated 60% score
     assert scored["match_score"] != 60
 
 
-def test_ai_tailoring_failure_raises_or_fails_without_silent_fallback():
-    """Verify that an AI failure during tailoring raises or flags failure without silent fallback."""
+def test_ai_tailoring_failure_raises_without_silent_fallback():
     job = {
         "job_id": "j_tailor_fail",
         "company": "Beta Corp",
@@ -87,88 +71,102 @@ def test_ai_tailoring_failure_raises_or_fails_without_silent_fallback():
     mock_client = AsyncMock()
     mock_client.call_llm.side_effect = RuntimeError("Rate limit exceeded")
 
-    import asyncio
     with pytest.raises(RuntimeError) as exc:
         asyncio.run(tailor_resume_async(job, profile, ai_client=mock_client))
     assert "Resume tailoring failed" in str(exc.value)
 
 
-def test_cost_estimator_truthful_and_unknown_handling():
-    """Verify that unknown models report 'Unknown pricing' rather than free."""
-    # Unknown model
-    unknown_est = estimate_batch_cost(
-        total_jobs=20,
-        provider="custom_llm",
-        model="custom-32b",
-        is_gemini_free=False,
-    )
-    assert unknown_est["cost_usd"] is None
-    assert unknown_est["cost_display"] == "Unknown pricing"
-    assert unknown_est["is_free"] is False
+def test_cost_estimator_is_token_only_until_operator_sets_pricing(monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_INPUT_PER_M", raising=False)
+    monkeypatch.delenv("DEEPSEEK_OUTPUT_PER_M", raising=False)
+    estimate = estimate_batch_cost(total_jobs=50, max_resumes=20)
+    assert estimate["total_tokens"] > 50_000
+    assert estimate["cost_usd"] is None
+    assert estimate["cost_display"] == "Token estimate only"
+    assert estimate["is_free"] is False
 
-    # Gemini Lite is NOT free if paid tier is selected
-    paid_lite = estimate_batch_cost(
-        total_jobs=100,
-        provider="gemini",
-        model="gemini-3.5-flash-lite",
-        is_gemini_free=False,
-    )
-    assert paid_lite["cost_usd"] > 0
-    assert paid_lite["is_free"] is False
-
-    # Gemini Free Tier is explicitly $0.00
-    free_lite = estimate_batch_cost(
-        total_jobs=100,
-        provider="gemini",
-        model="gemini-3.5-flash-lite",
-        is_gemini_free=True,
-    )
-    assert free_lite["cost_usd"] == 0.0
-    assert free_lite["is_free"] is True
+    monkeypatch.setenv("DEEPSEEK_INPUT_PER_M", "0.27")
+    monkeypatch.setenv("DEEPSEEK_OUTPUT_PER_M", "1.10")
+    priced = estimate_batch_cost(total_jobs=50, max_resumes=20)
+    assert priced["cost_usd"] > 0
+    assert priced["cost_display"].startswith("~$")
 
 
-def test_scoped_client_credential_isolation():
-    """Verify that ScopedAIClient does not mutate process environment variables."""
-    initial_openai = os.environ.get("OPENAI_API_KEY")
-    initial_deepseek = os.environ.get("DEEPSEEK_API_KEY")
+def test_client_requires_a_key_and_does_not_mutate_environment(monkeypatch):
+    initial = os.environ.get("DEEPSEEK_API_KEY")
 
-    client = ScopedAIClient(
-        provider="openai",
-        api_keys=["test-key-abc-123"],
-        model="gpt-4o-mini",
-    )
-    assert client.api_keys == ["test-key-abc-123"]
+    monkeypatch.setattr(engine, "deepseek_api_key", lambda: "")
+    with pytest.raises(CredentialsRequired, match="not configured"):
+        engine.DeepSeekClient()
 
-    # Global environment must remain untouched
-    assert os.environ.get("OPENAI_API_KEY") == initial_openai
-    assert os.environ.get("DEEPSEEK_API_KEY") == initial_deepseek
+    monkeypatch.setattr(engine, "deepseek_api_key", lambda: "test-key-abc-123")
+    client = engine.DeepSeekClient()
+    assert client.api_key == "test-key-abc-123"
+    assert os.environ.get("DEEPSEEK_API_KEY") == initial
+    asyncio.run(client.close())
 
 
-def test_gemini_key_pool_multi_project_rotation_and_isolated_cooldown():
-    """Verify that GeminiKeyPool gives each key an independent rate limiter and isolated cooldown."""
-    import asyncio
-    from core.ai_engine import GeminiKeyPool
+def _fake_transport(monkeypatch, script):
+    """Replace AsyncOpenAI with a scripted transport.
 
-    pool = GeminiKeyPool(keys=["key_proj_alpha_12345", "key_proj_beta_67890"], rpm_limit=15)
-    assert len(pool.get_keys()) == 2
+    `script` holds HTTP status codes to raise, or "ok" to answer successfully.
+    Returns the recorded calls and the exception class used for failures.
+    """
+    calls = []
 
-    # First acquisition gets first key
-    _, key1, mask1 = asyncio.run(pool.acquire_client())
-    assert key1 == "key_proj_alpha_12345"
+    class ProviderError(Exception):
+        def __init__(self, status):
+            self.status_code = status
+            self.response = SimpleNamespace(headers={"retry-after": "0"})
 
-    # Second acquisition immediately gets second key (round robin with 0 wait)
-    _, key2, mask2 = asyncio.run(pool.acquire_client())
-    assert key2 == "key_proj_beta_67890"
+    class Transport:
+        def __init__(self, **kwargs):
+            self.chat = SimpleNamespace(completions=self)
 
-    # Now rate limit key 1
-    pool.record_rate_limit("key_proj_alpha_12345", cooldown_seconds=60.0)
+        async def create(self, **kwargs):
+            calls.append(kwargs)
+            outcome = script.pop(0)
+            if outcome != "ok":
+                raise ProviderError(outcome)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content='{"ok":true}'))],
+                usage=SimpleNamespace(prompt_tokens=42, completion_tokens=5),
+            )
 
-    # Next acquisition MUST select key 2 because key 1 is on cooldown
-    _, key3, _ = asyncio.run(pool.acquire_client())
-    assert key3 == "key_proj_beta_67890"
+        async def close(self):
+            return None
 
-    # Stats tracked per key
-    assert pool.stats[mask1]["calls"] == 1
-    assert pool.stats[mask1]["rate_limits"] == 1
-    assert pool.stats[mask2]["calls"] == 2
-    assert pool.stats[mask2]["rate_limits"] == 0
+    monkeypatch.setattr(engine, "AsyncOpenAI", Transport)
+    return calls, ProviderError
+
+
+def test_deepseek_retries_transient_errors_then_succeeds(monkeypatch):
+    calls, ProviderError = _fake_transport(monkeypatch, [503, 429, "ok"])
+    monkeypatch.setattr(engine, "deepseek_api_key", lambda: "test-key")
+    client = engine.DeepSeekClient(max_attempts=3)
+
+    result = asyncio.run(client.call_llm("system", "job"))
+    assert result == ('{"ok":true}', 42, 5)
+    assert len(calls) == 3
+    asyncio.run(client.close())
+
+
+def test_deepseek_credential_errors_are_actionable(monkeypatch):
+    _, ProviderError = _fake_transport(monkeypatch, [401])
+    monkeypatch.setattr(engine, "deepseek_api_key", lambda: "bad-key")
+    client = engine.DeepSeekClient(max_attempts=2)
+
+    with pytest.raises(CredentialsRequired, match="rejected"):
+        asyncio.run(client.call_llm("system", "job"))
+    asyncio.run(client.close())
+
+
+def test_deepseek_non_retryable_client_errors_fail_fast(monkeypatch):
+    calls, ProviderError = _fake_transport(monkeypatch, [400])
+    monkeypatch.setattr(engine, "deepseek_api_key", lambda: "test-key")
+    client = engine.DeepSeekClient(max_attempts=3)
+
+    with pytest.raises(RuntimeError, match="HTTP 400"):
+        asyncio.run(client.call_llm("system", "job"))
+    assert len(calls) == 1
+    asyncio.run(client.close())

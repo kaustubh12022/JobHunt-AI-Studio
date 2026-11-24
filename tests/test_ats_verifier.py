@@ -1,4 +1,4 @@
-"""
+﻿"""
 Universal ATS Acceptance Test Suite for JobHunt AI Studio.
 Tests that ats_verifier correctly catches flaws and accepts compliant resumes.
 """
@@ -19,7 +19,7 @@ from core.profile_manager import load_profile_from_file
 
 def test_ats_acceptance_on_sample_profile():
     """Verify that sample profile renders to a 100% ATS compliant PDF."""
-    sample_yaml = PROJECT_ROOT / "data" / "sample_profile.yaml"
+    sample_yaml = PROJECT_ROOT / "data" / "profile.yaml"
     profile = load_profile_from_file(sample_yaml)
 
     job = {

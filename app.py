@@ -1,52 +1,40 @@
-"""JobHunt AI Studio: Decoupled presentation and execution studio."""
+"""JobHunt AI Studio: Kaustubh Kale's private, locked resume studio."""
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
-import os
 import time
 import uuid
-
-logger = logging.getLogger("JobHuntAIStudio")
 from html import escape
 from pathlib import Path
-from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import streamlit as st
 
-from core.ai_engine import ScopedAIClient, ai_engine_instance
+from core.access import access_configured, verify_access
 from core.ats_verifier import audit_resume_pdf
 from core.batch_runner import batch_runner
-from core.browser_storage import sync_browser_storage
 from core.cost_estimator import estimate_batch_cost
 from core.csv_parser import generate_sample_csv_str, parse_jobs_csv
 from core.health import perform_system_health_check
-from core.models import ArtifactResult, JobInput, JobResult, RunConfig, RunStatus, Stage
-from core.packager import build_batch_zip_bytes
-from core.pdf_generator import generate_single_page_pdf
-from core.profile_manager import (
-    DEFAULT_PROFILE_TEMPLATE,
-    load_profile_from_file,
-    load_profile_from_str,
-    normalize_profile,
-    profile_to_yaml_str,
-)
-from core.resume_tailor import tailor_resume_async
-from core.run_service import RunService
+from core.models import JobInput, RunConfig, RunStatus
+from core.profile_manager import load_owner_profile, profile_to_yaml_str
+from core.resume_review import REVIEW_MODEL, approved_pdf, approved_pdf_bytes
+from core.run_service import run_service_instance as run_service
 from core.run_store import run_store_instance
-from core.scorer import score_job_async
-from core.security import (
-    build_safe_pdf_filename,
-    compute_input_fingerprint,
-    compute_stable_job_id,
-    generate_recovery_code,
-    hash_recovery_code,
-    is_safe_url,
-)
+from core.security import hash_recovery_code, is_safe_url
 from core.session_manager import session_manager
-from core.summary_reporter import generate_summary_csv, render_summary_html
+from core.settings import (
+    APPROVAL_THRESHOLD,
+    MAX_DRAFTS,
+    MAX_RESUMES,
+    MODEL,
+    MODEL_LABEL,
+    OWNER_EMAIL,
+    OWNER_NAME,
+    PROVIDER,
+    SCORE_THRESHOLD,
+    deepseek_api_key,
+)
 from ui import (
     candidate_card,
     counts,
@@ -57,12 +45,12 @@ from ui import (
     render_ats_checklist,
     render_health_card,
     render_live_log_console,
-    result_group,
     section,
     styles,
 )
 
-# Page configuration & design system injection
+logger = logging.getLogger("JobHuntAIStudio")
+
 st.set_page_config(
     page_title="JobHunt AI Studio",
     page_icon="◈",
@@ -71,34 +59,92 @@ st.set_page_config(
 )
 styles()
 
-# Instantiate backend orchestrator
-run_service = RunService(store=run_store_instance)
+# ==========================================
+# OWNER GATE (fails closed; nothing private renders before unlock)
+# ==========================================
+if not access_configured():
+    st.markdown('<span class="eyebrow">PRIVATE STUDIO</span>', unsafe_allow_html=True)
+    st.title("Studio locked")
+    st.error(
+        "STUDIO_ACCESS_KEY is not configured on this server. "
+        "Set a passphrase of at least 12 characters and restart the studio."
+    )
+    st.stop()
 
+if not st.session_state.get("owner_unlocked", False):
+    st.markdown('<span class="eyebrow">PRIVATE STUDIO</span>', unsafe_allow_html=True)
+    st.title("Owner access only")
+    st.caption("This is a private studio. Enter the owner passphrase to continue.")
+    passphrase = st.text_input("Owner passphrase", type="password", key="owner_passphrase")
+    failed = st.session_state.get("owner_failed_attempts", 0)
+    if st.button("Unlock studio", type="primary", use_container_width=True):
+        if verify_access(passphrase):
+            st.session_state["owner_unlocked"] = True
+            st.session_state["owner_failed_attempts"] = 0
+            st.rerun()
+        else:
+            st.session_state["owner_failed_attempts"] = failed + 1
+            time.sleep(min(2.0, 0.25 * (failed + 1)))
+            st.error("Incorrect passphrase.")
+    if failed >= 3:
+        st.caption("Repeated failures are rate-limited.")
+    st.stop()
 
-def run_coro_sync(coro):
-    """Executes an async coroutine synchronously inside the Streamlit script loop."""
-    try:
-        return asyncio.run(coro)
-    except RuntimeError:
-        loop = asyncio.get_event_loop()
-        return loop.run_until_complete(coro)
+# ==========================================
+# LOCKED SESSION SETUP
+# ==========================================
+st.session_state.setdefault("session_id", uuid.uuid4().hex[:12])
+session_id = st.session_state.session_id
 
+try:
+    session_manager.cleanup_expired_sessions()
+except Exception:
+    pass
 
-def sample_profile() -> Dict[str, Any]:
-    """Loads the bundled fictional candidate profile."""
-    sample = Path(__file__).parent / "data" / "sample_profile.yaml"
-    try:
-        return load_profile_from_file(sample)
-    except Exception:
-        return normalize_profile(DEFAULT_PROFILE_TEMPLATE)
+# The profile is always reloaded from the bundled owner file: it cannot be edited.
+st.session_state.profile = load_owner_profile()
+for key in ("batch_results", "zip_bytes"):
+    st.session_state.setdefault(key, None)
+
+run_id = st.session_state.get("current_run_id")
+recovery_code = st.session_state.get("current_recovery_code")
+active_run_state = run_service.get_run_status(run_id, recovery_code) if run_id else {}
+authorized = active_run_state.get("is_authorized", False)
+run_config = active_run_state.get("config", {})
+review_required = bool(run_config.get("reviewer_model", True))
+events = active_run_state.get("events", [])
+is_running = bool(run_id and authorized and (
+    batch_runner.is_running(run_id) or active_run_state.get("status") == RunStatus.RUNNING.value
+))
+if authorized and not is_running:
+    st.session_state.batch_results = active_run_state["completed_jobs"] or None
+    if st.session_state.batch_results:
+        for result in st.session_state.batch_results:
+            if review_required and result["review_status"] == "Approved" and not approved_pdf(result):
+                result["status"] = result["review_status"] = "Artifact verification failed"
+                result["pdf_path"] = None
+        artifact = run_service.package_run_artifacts(run_id, recovery_code, persist=False)
+        st.session_state.zip_bytes = artifact.zip_bytes
+        st.session_state.summary_csv = artifact.summary_csv_str
+        st.session_state.summary_html = artifact.summary_html_str
+    if active_run_state["status"] == RunStatus.COMPLETED.value:
+        st.session_state.pipeline_progress = 1.0
+        st.session_state.pipeline_view = pipeline_html(
+            results=st.session_state.batch_results or [], total=active_run_state["total_jobs"], complete=True,
+            company="Batch complete",
+            role="Open Review & download below to inspect the approved resumes.",
+        )
+
+server_key_ready = bool(deepseek_api_key())
 
 
 def clear_results() -> None:
-    """Resets all results, artifacts, and search state."""
+    """Resets results, artifacts, and search state for the current session."""
     for key in (
         "batch_results",
         "zip_bytes",
         "summary_csv",
+        "summary_html",
         "pipeline_view",
         "pipeline_progress",
         "pdf_checks",
@@ -110,94 +156,14 @@ def clear_results() -> None:
         st.session_state.pop(key, None)
 
 
-def apply_profile(profile: Dict[str, Any]) -> None:
-    """Applies a candidate profile to the active session state."""
-    st.session_state.profile = profile
-    st.session_state.profile_editor_pending = profile_to_yaml_str(profile)
-    st.session_state.profile_notice = "Profile applied. Your next batch will use these details."
-
-
-# Background maintenance & session setup
-try:
-    session_manager.cleanup_expired_sessions()
-except Exception:
-    pass
-
-if "session_id" not in st.session_state:
-    qp_id = st.query_params.get("session_id")
-    if qp_id and len(qp_id) >= 6:
-        st.session_state.session_id = qp_id
-    else:
-        st.session_state.session_id = uuid.uuid4().hex[:12]
-st.query_params["session_id"] = st.session_state.session_id
-session_id = st.session_state.session_id
-session_dir = session_manager.get_session_dir(session_id)
-resumes_dir = session_manager.get_resumes_dir(session_id)
-
-if "profile" not in st.session_state:
-    st.session_state.profile = sample_profile()
-if "profile_editor_pending" in st.session_state:
-    st.session_state.profile_editor = st.session_state.pop("profile_editor_pending")
-for key in ("batch_results", "zip_bytes"):
-    st.session_state.setdefault(key, None)
-
-# Check background execution state from server
-active_run_state = batch_runner.get_run_state(session_id)
-is_batch_active = batch_runner.is_running(session_id)
-is_running = is_batch_active or bool(st.session_state.get("batch_running", False))
-
-if active_run_state.get("status") == "completed" and not st.session_state.get("batch_results"):
-    st.session_state.batch_results = active_run_state.get("results")
-    st.session_state.summary_csv = active_run_state.get("summary_csv")
-    z_path = active_run_state.get("zip_path")
-    if z_path and os.path.exists(z_path):
-        with open(z_path, "rb") as f:
-            st.session_state.zip_bytes = f.read()
-    st.session_state.pipeline_progress = 1.0
-    st.session_state.pipeline_view = pipeline_html(
-        results=st.session_state.batch_results,
-        total=len(st.session_state.batch_results),
-        complete=True,
-    )
-
-# ------------------------------------------
-# OPTION A: Browser Local Storage Sync
-# ------------------------------------------
-storage_action = st.session_state.pop("pending_storage_action", "read")
-storage_payload = st.session_state.pop("pending_storage_payload", None)
-
-saved_device_data = sync_browser_storage(
-    action=storage_action,
-    payload=storage_payload,
-    key="jobhunt_browser_storage_sync",
-)
-
-if saved_device_data and not st.session_state.get("device_data_synced", False):
-    if "api_keys" in saved_device_data and saved_device_data["api_keys"]:
-        st.session_state["saved_api_keys"] = saved_device_data["api_keys"]
-    if "provider" in saved_device_data and saved_device_data["provider"]:
-        st.session_state["saved_provider"] = saved_device_data["provider"]
-    if "gemini_tier" in saved_device_data and saved_device_data["gemini_tier"]:
-        st.session_state["saved_gemini_tier"] = saved_device_data["gemini_tier"]
-    if "profile_yaml" in saved_device_data and saved_device_data["profile_yaml"]:
-        try:
-            stored_prof = load_profile_from_str(saved_device_data["profile_yaml"])
-            apply_profile(stored_prof)
-            st.session_state.profile_editor = profile_to_yaml_str(stored_prof)
-            st.session_state["profile_notice"] = "Restored saved profile & credentials from this device."
-        except Exception as e:
-            logger.error(f"Error creating run: {e}")
-    st.session_state["device_data_synced"] = True
-
 # ==========================================
-# SIDEBAR: Providers, Keys, Settings & Health
+# SIDEBAR: Owner, health, recovery, session
 # ==========================================
 with st.sidebar:
     st.markdown('<div class="brand"><span class="brand-mark">JH</span> JobHunt AI Studio</div>', unsafe_allow_html=True)
-    st.caption("Intelligent resume tailoring & batch pipeline")
+    st.caption(f"Private studio · {OWNER_NAME}")
     st.divider()
 
-    # System Health Diagnostics
     try:
         health_info = perform_system_health_check()
         st.markdown(render_health_card(health_info), unsafe_allow_html=True)
@@ -205,167 +171,22 @@ with st.sidebar:
         pass
     st.divider()
 
-    st.markdown("##### AI connection")
+    st.markdown("##### Locked engine")
     if is_running:
         st.markdown('<div class="locked-badge">&#128274; Batch running · settings locked</div>', unsafe_allow_html=True)
-
-    provider_options = ["Google Gemini", "DeepSeek", "OpenAI"]
-    saved_prov = st.session_state.get("saved_provider", "Google Gemini")
-    prov_idx = provider_options.index(saved_prov) if saved_prov in provider_options else 0
-    provider = st.selectbox("AI Provider", provider_options, index=prov_idx, disabled=is_running)
-    api_keys_list: List[str] = []
-    is_gemini_free = False
-    gemini_rpm = 15
-
-    if provider == "Google Gemini":
-        with st.expander("Model & quota settings", expanded=False):
-            saved_tier = st.session_state.get("saved_gemini_tier", "Free Tier")
-            tier_idx = 0 if saved_tier == "Free Tier" else 1
-            gemini_tier = st.radio("Gemini account tier", ["Free Tier", "Paid Tier"], index=tier_idx, disabled=is_running)
-            is_gemini_free = gemini_tier == "Free Tier"
-            if is_gemini_free:
-                selected_model = "gemini-3.5-flash-lite"
-                st.caption("Gemini 3.5 Flash-Lite · Free Tier cap: 15 RPM. Provider rate limits apply.")
-            else:
-                selected_model = st.selectbox("Gemini Paid Model", ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash"], disabled=is_running)
-                gemini_rpm = st.number_input("Max RPM Cap", min_value=15, max_value=300, value=60, disabled=is_running)
-
-        default_gemini = st.session_state.get("saved_api_keys", "") if saved_prov == "Google Gemini" else ""
-        if not default_gemini:
-            default_gemini = os.environ.get("GEMINI_API_KEYS", os.environ.get("GEMINI_API_KEY", ""))
-
-        if is_gemini_free:
-            raw_keys = st.text_input(
-                "Gemini API keys",
-                value=default_gemini,
-                type="password",
-                disabled=is_running,
-                help="Paste one key, or separate multiple keys with commas.",
-            )
-            api_keys_list = [k.strip().strip("'\"`") for k in raw_keys.replace("\n", ",").split(",") if k.strip().strip("'\"`")]
-        else:
-            single_key = st.text_input(
-                "Gemini Paid API Key",
-                value=default_gemini,
-                type="password",
-                disabled=is_running,
-            )
-            api_keys_list = [single_key.strip().strip("'\"`")] if single_key.strip().strip("'\"`") else []
-    elif provider == "DeepSeek":
-        with st.expander("Model settings"):
-            selected_model = st.selectbox("DeepSeek Model", ["deepseek-chat", "deepseek-reasoner"], disabled=is_running)
-        default_ds = st.session_state.get("saved_api_keys", "") if saved_prov == "DeepSeek" else ""
-        if not default_ds:
-            default_ds = os.environ.get("DEEPSEEK_API_KEY", "")
-        ds_key = st.text_input("DeepSeek API Key", value=default_ds, type="password", disabled=is_running)
-        api_keys_list = [ds_key.strip().strip("'\"`")] if ds_key.strip().strip("'\"`") else []
+    st.caption(f"{MODEL_LABEL} · `{MODEL}`")
+    st.caption(f"Owner profile: {OWNER_NAME}")
+    if server_key_ready:
+        st.caption("DeepSeek credential: configured on this server")
     else:
-        with st.expander("Model settings"):
-            selected_model = st.selectbox("OpenAI Model", ["gpt-4o-mini", "gpt-4o"], disabled=is_running)
-        default_oa = st.session_state.get("saved_api_keys", "") if saved_prov == "OpenAI" else ""
-        if not default_oa:
-            default_oa = os.environ.get("OPENAI_API_KEY", "")
-        oa_key = st.text_input("OpenAI API Key", value=default_oa, type="password", disabled=is_running)
-        api_keys_list = [oa_key.strip().strip("'\"`")] if oa_key.strip().strip("'\"`") else []
-
-    clean_provider = (
-        "gemini"
-        if "gemini" in provider.lower()
-        else ("deepseek" if "deepseek" in provider.lower() else "openai")
-    )
-    if api_keys_list:
-        try:
-            st.session_state.ai_client = ScopedAIClient(
-                provider=clean_provider,
-                api_keys=api_keys_list,
-                model=selected_model,
-                rpm_limit=15 if is_gemini_free else gemini_rpm,
-            )
-        except Exception:
-            st.session_state.ai_client = None
-    else:
-        st.session_state.ai_client = None
-
-    st.caption(f"{len(api_keys_list)} key(s) entered · {selected_model}" if api_keys_list else "Add an API key to enable your batch.")
-
-    with st.expander("Device persistence (Remember me)", expanded=False):
-        st.caption("Securely store your API keys & candidate profile in your browser's private localStorage. Keys never touch server storage or database.")
-        c_save, c_clear = st.columns(2)
-        with c_save:
-            if st.button("Save device", help="Save current keys & profile on this browser", use_container_width=True, disabled=is_running):
-                curr_keys = ""
-                if provider == "Google Gemini":
-                    curr_keys = raw_keys if is_gemini_free else single_key
-                elif provider == "DeepSeek":
-                    curr_keys = ds_key
-                else:
-                    curr_keys = oa_key
-
-                prof_yaml_str = profile_to_yaml_str(st.session_state.profile) if "profile" in st.session_state else ""
-                st.session_state["pending_storage_action"] = "save"
-                st.session_state["pending_storage_payload"] = {
-                    "provider": provider,
-                    "api_keys": curr_keys,
-                    "gemini_tier": gemini_tier if provider == "Google Gemini" else None,
-                    "profile_yaml": prof_yaml_str,
-                }
-                st.session_state["saved_api_keys"] = curr_keys
-                st.session_state["saved_provider"] = provider
-                if provider == "Google Gemini":
-                    st.session_state["saved_gemini_tier"] = gemini_tier
-                st.session_state["device_data_synced"] = True
-                st.toast("Saved configuration to this browser!", icon="💾")
-                st.rerun()
-
-        with c_clear:
-            if st.button("Clear device", help="Wipe saved keys and profile from this browser", use_container_width=True, disabled=is_running):
-                st.session_state["pending_storage_action"] = "clear"
-                st.session_state["pending_storage_payload"] = None
-                st.session_state.pop("saved_api_keys", None)
-                st.session_state.pop("saved_provider", None)
-                st.session_state.pop("saved_gemini_tier", None)
-                st.session_state["device_data_synced"] = False
-                st.toast("Cleared saved browser data.", icon="🗑️")
-                st.rerun()
-
+        st.warning("DeepSeek credential missing on this server. Set DEEPSEEK_API_KEY.")
+    st.caption("No visitor can change the profile, model, keys or batch policy.")
     st.divider()
 
-    # Batch Parameters in Sidebar
-    st.markdown("##### Batch parameters")
-    st.session_state.setdefault("score_threshold", 70)
-    st.session_state.setdefault("max_resumes", 20)
-    with st.expander("Threshold & resume limits", expanded=False):
-        sb_score_threshold = st.slider(
-            "Match threshold (%)",
-            40,
-            90,
-            value=int(st.session_state.get("score_threshold", 70)),
-            step=5,
-            key="sidebar_score_threshold",
-            disabled=is_running,
-            help="Generate resumes for jobs at or above this score.",
-        )
-        sb_max_resumes = st.slider(
-            "Resume limit",
-            1,
-            100,
-            value=int(st.session_state.get("max_resumes", 20)),
-            key="sidebar_max_resumes",
-            disabled=is_running,
-            help="Maximum resume generation attempts per batch.",
-        )
-        if sb_score_threshold != st.session_state.get("score_threshold", 70):
-            st.session_state["score_threshold"] = sb_score_threshold
-        if sb_max_resumes != st.session_state.get("max_resumes", 20):
-            st.session_state["max_resumes"] = sb_max_resumes
-    st.caption(f"Active: {st.session_state.get('score_threshold', 70)}% match · max {st.session_state.get('max_resumes', 20)} resumes")
-    st.divider()
-
-    # Recovery Code Lookup & Management
     with st.expander("Run recovery & lookup", expanded=False):
         st.caption("Inspect, resume, or download previous batch runs using a 12-character recovery code.")
         lookup_code = st.text_input("Batch recovery code", placeholder="jh-xxxx-xxxx-xxxx", key="sidebar_recovery_code")
-        if st.button("Inspect run", key="btn_inspect_run", use_container_width=True) and lookup_code:
+        if st.button("Inspect run", key="btn_inspect_run", use_container_width=True, disabled=is_running) and lookup_code:
             code_hash = hash_recovery_code(lookup_code.strip())
             with run_store_instance._get_connection() as conn:
                 matched_row = conn.execute("SELECT * FROM runs WHERE recovery_code_hash = ?", (code_hash,)).fetchone()
@@ -378,42 +199,36 @@ with st.sidebar:
                 st.error("No run found matching this recovery code.")
 
         if "inspected_run" in st.session_state:
-            irun = st.session_state["inspected_run"]
+            inspected = st.session_state["inspected_run"]
+            irun = run_store_instance.get_run(inspected["run_id"]) or inspected
             icode = st.session_state["inspected_code"]
-            st.markdown(f"**Run ID:** `{irun['run_id']}`")
-            st.markdown(f"**Status:** `{irun['status']}`")
-            st.markdown(f"**Jobs:** {irun['completed_count']} / {irun['total_jobs']} completed")
-            st.markdown(f"**Verified Resumes:** {irun['verified_resumes_count']}")
-            if st.button("Load results into workspace", key="btn_load_inspected", use_container_width=True):
-                completed = run_store_instance.get_completed_job_results(irun["run_id"])
-                if completed:
-                    st.session_state.batch_results = [r.to_dict() for r in completed]
-                    st.session_state["current_run_id"] = irun["run_id"]
-                    st.session_state["current_recovery_code"] = icode
-                    art_dir = run_store_instance.get_run_artifacts_dir(irun["run_id"])
-                    zip_path = art_dir / "jobhunt_tailored_batch.zip"
-                    if zip_path.is_file():
-                        st.session_state.zip_bytes = zip_path.read_bytes()
-                    st.success(f"Loaded {len(completed)} jobs into workspace.")
-                    st.rerun()
-                else:
-                    st.info("No completed jobs in this run yet.")
-            if st.button("Delete run & artifacts", key="btn_delete_inspected", use_container_width=True):
+            st.text(f"Run {irun['run_id']} · {irun['status']} · {irun['completed_count']}/{irun['total_jobs']} scored")
+            if st.button("Load results into workspace", key="btn_load_inspected", use_container_width=True, disabled=is_running):
+                clear_results()
+                st.session_state["current_run_id"] = irun["run_id"]
+                st.session_state["current_recovery_code"] = icode
+                st.rerun()
+            if st.button("Delete run & artifacts", key="btn_delete_inspected", use_container_width=True, disabled=is_running):
                 try:
                     run_service.delete_run(irun["run_id"], icode)
                     st.session_state.pop("inspected_run", None)
-                    st.success("Run purged successfully.")
+                    if irun["run_id"] == run_id:
+                        clear_results()
                     st.rerun()
-                except Exception as e:
-                    st.error(f"Could not delete run: {e}")
+                except (RuntimeError, PermissionError) as error:
+                    st.error(str(error))
 
     with st.expander("Session & storage"):
         st.caption(f"Session: {session_id}")
+        st.caption(f"Contact on file: {OWNER_EMAIL}")
         st.caption("Local workspace files expire automatically.")
-        if st.button("Delete session files", use_container_width=True):
+        if st.button("Delete session files", use_container_width=True, disabled=is_running):
             session_manager.cleanup_session(session_id)
             session_manager.clear_checkpoint(session_id)
             clear_results()
+            st.rerun()
+        if st.button("Lock studio", use_container_width=True):
+            st.session_state.clear()
             st.rerun()
 
 # ==========================================
@@ -422,144 +237,151 @@ with st.sidebar:
 st.markdown('<span class="eyebrow">YOUR NEXT CHAPTER, PREPARED.</span>', unsafe_allow_html=True)
 st.title("Make every application count.")
 st.markdown(
-    '<p class="hero-copy">Match your experience to the right roles. Create verified single-page tailored resumes in one focused workflow.</p>',
+    f'<p class="hero-copy">Kaustubh\'s private studio. Match your experience to the right roles and '
+    f'create verified single-page tailored resumes in one focused workflow.</p>',
     unsafe_allow_html=True,
 )
-tab_batch, tab_profile, tab_guide = st.tabs(["Workspace", "Candidate profile", "Guide & templates"])
+tab_batch, tab_profile, tab_guide = st.tabs(["Workspace", "Master profile", "Guide & templates"])
 
 # ------------------------------------------
-# TAB: CANDIDATE PROFILE
+# TAB: MASTER PROFILE (read-only, locked)
 # ------------------------------------------
 with tab_profile:
-    section("01", "Your experience, in one place", "Keep your master profile accurate. It is the source for matching and tailoring.")
-    if notice := st.session_state.pop("profile_notice", None):
-        st.success(notice)
+    section("01", "Kaustubh's master profile", "Locked source of truth for every score and every tailored resume.")
     candidate_card(st.session_state.profile)
+    profile = st.session_state.profile
+    info = profile.get("personal_information", {})
 
-    left_prof, right_prof = st.columns([1, 1], gap="large")
-    with left_prof:
+    contact_col, export_col = st.columns([2, 1], gap="large")
+    with contact_col:
         with st.container(border=True):
-            st.markdown("##### Import a profile")
-            prof_file = st.file_uploader(
-                "Master profile",
-                type=["yaml", "yml", "json"],
-                help="Upload YAML or JSON, then apply it explicitly.",
-            )
-            if st.button("Apply uploaded profile", disabled=prof_file is None, use_container_width=True):
-                try:
-                    apply_profile(load_profile_from_str(prof_file.getvalue().decode("utf-8-sig")))
-                    st.rerun()
-                except Exception as exc:
-                    st.error(f"Could not apply profile: {exc}")
-    with right_prof:
+            st.markdown("##### Contact")
+            st.text(f"Name: {info.get('name')} {info.get('surname')}")
+            st.text(f"Email: {info.get('email')}")
+            st.text(f"Phone: {info.get('phone')}")
+            st.text(f"Location: {info.get('address')}")
+            st.text(f"LinkedIn: {info.get('linkedin')}")
+            st.text(f"GitHub: {info.get('github')}")
+            st.caption("Target roles: " + ", ".join(profile.get("target_roles", [])))
+    with export_col:
         with st.container(border=True):
-            st.markdown("##### Active profile")
-            info = st.session_state.profile.get("personal_information", {})
-            for label, key in (("Email", "email"), ("Phone", "phone"), ("Location", "address")):
-                st.text(f"{label}: {info.get(key) or 'Not provided'}")
-            st.caption("Target roles: " + ", ".join(st.session_state.profile.get("target_roles", [])))
-            col_d1, col_d2 = st.columns(2)
-            with col_d1:
-                st.download_button(
-                    "Download active profile (.yaml)",
-                    profile_to_yaml_str(st.session_state.profile),
-                    file_name="master_profile.yaml",
-                    mime="text/yaml",
-                    use_container_width=True,
-                    key="tab2_dl_active_yaml",
-                )
-            with col_d2:
-                st.download_button(
-                    "Download blank template (.yaml)",
-                    profile_to_yaml_str(DEFAULT_PROFILE_TEMPLATE),
-                    file_name="candidate_profile_template.yaml",
-                    mime="text/yaml",
-                    use_container_width=True,
-                    key="tab2_dl_blank_yaml",
-                )
-
-    with st.expander("Edit profile YAML", expanded=False):
-        st.session_state.setdefault("profile_editor", profile_to_yaml_str(st.session_state.profile))
-        with st.form("profile_form"):
-            edited_yaml = st.text_area(
-                "Profile YAML",
-                key="profile_editor",
-                height=360,
-                help="Changes are used only after you apply them.",
+            st.markdown("##### Locked profile")
+            st.caption("Editing and uploading are disabled by design. To change the profile, edit data/profile.yaml in the repository.")
+            st.download_button(
+                "Download profile (.yaml)",
+                profile_to_yaml_str(profile),
+                file_name="kaustubh_kale_master_profile.yaml",
+                mime="text/yaml",
+                use_container_width=True,
+                key="tab2_dl_active_yaml",
             )
-            apply_edit = st.form_submit_button("Apply profile changes", type="primary")
-        if apply_edit:
-            try:
-                st.session_state.profile = load_profile_from_str(edited_yaml)
-                st.session_state.profile_notice = "Profile applied. Your next batch will use these details."
-                st.rerun()
-            except Exception as exc:
-                st.error(f"Could not apply changes: {exc}")
 
-    with st.expander("Sample profile"):
-        st.caption("Load the bundled sample to explore the workflow. Replace its details before creating your own applications.")
-        if st.button("Load sample profile"):
-            apply_profile(sample_profile())
-            st.rerun()
+    with st.expander("Professional summary", expanded=True):
+        st.write(profile.get("profile_summary", "No summary recorded."))
+
+    with st.expander("Education", expanded=True):
+        for edu in profile.get("education_details", []):
+            st.markdown(
+                f"**{edu.get('education_level')}** · {edu.get('institution')}  \n"
+                f"{edu.get('dates')} · {edu.get('location')}  \n"
+                f"{edu.get('final_evaluation_grade')}"
+            )
+            for line in edu.get("secondary_education", []) or []:
+                st.caption(line)
+
+    with st.expander("Experience", expanded=True):
+        for exp in profile.get("experience_details", []):
+            st.markdown(
+                f"**{exp.get('position')}** · {exp.get('company')}  \n"
+                f"{exp.get('dates')} · {exp.get('location')}"
+            )
+            for bullet in exp.get("key_responsibilities", []):
+                st.markdown(f"- {bullet}")
+
+    with st.expander(f"Projects · {len(profile.get('projects', []))}", expanded=True):
+        for proj in profile.get("projects", []):
+            st.markdown(f"**{proj.get('name')}** · {proj.get('tech_stack')}")
+            for bullet in proj.get("description_bullets", []):
+                st.markdown(f"- {bullet}")
+            if proj.get("link"):
+                st.caption(proj["link"])
+            st.divider()
+
+    with st.expander(f"Skills · {len(profile.get('skills', []))}", expanded=True):
+        structured = profile.get("skills_structured", {})
+        if structured:
+            for group, group_skills in structured.items():
+                st.markdown(f"**{group}**")
+                st.markdown(" · ".join(group_skills))
+        with st.expander("Full skill inventory"):
+            st.markdown(" · ".join(profile.get("skills", [])))
+
+    with st.expander("Certifications, achievements & languages"):
+        for cert in profile.get("certifications", []):
+            if isinstance(cert, dict):
+                st.markdown(f"**{cert.get('name')}** · {cert.get('description', '')}")
+            else:
+                st.markdown(f"- {cert}")
+        for ach in profile.get("achievements", []):
+            if isinstance(ach, dict):
+                st.markdown(f"**{ach.get('name')}** · {ach.get('description', '')}")
+            else:
+                st.markdown(f"- {ach}")
+        for lang in profile.get("languages", []) or []:
+            st.caption(f"{lang.get('language')} · {lang.get('proficiency')}")
+        prefs = profile.get("work_preferences", {}) or {}
+        if prefs:
+            st.caption(" · ".join(f"{k}: {v}" for k, v in prefs.items()))
 
 # ------------------------------------------
 # TAB: GUIDE & TEMPLATES
 # ------------------------------------------
 with tab_guide:
-    section("01", "Start with the right inputs", "Upload a jobs CSV and a YAML or JSON candidate profile.")
-    guide_col1, guide_col2 = st.columns(2)
-    with guide_col1:
-        st.download_button(
-            "Download sample jobs CSV",
-            generate_sample_csv_str(),
-            file_name="sample_jobs_template.csv",
-            mime="text/csv",
-            type="primary",
-            use_container_width=True,
-        )
-    with guide_col2:
-        st.download_button(
-            "Download candidate profile template (.yaml)",
-            profile_to_yaml_str(DEFAULT_PROFILE_TEMPLATE),
-            file_name="candidate_profile_template.yaml",
-            mime="text/yaml",
-            use_container_width=True,
-        )
+    section("01", "Start with the right inputs", "Upload a jobs CSV. The locked profile and DeepSeek engine do the rest.")
+    st.download_button(
+        "Download sample jobs CSV",
+        generate_sample_csv_str(),
+        file_name="sample_jobs_template.csv",
+        mime="text/csv",
+        type="primary",
+        use_container_width=True,
+    )
     st.dataframe(
         pd.DataFrame([
             {"Field": "Company", "Required": "Yes", "Accepted headers": "Company, employer, organization"},
             {"Field": "Job title", "Required": "Yes", "Accepted headers": "Title, job title, role, position"},
             {"Field": "Description", "Required": "Yes", "Accepted headers": "Job description, jd_text, description, content"},
             {"Field": "Apply URL", "Required": "No", "Accepted headers": "URL, job link, apply_url"},
+            {"Field": "Official company website", "Required": "No", "Accepted headers": "company_website, official_website"},
             {"Field": "Location", "Required": "No", "Accepted headers": "Location, city, work_mode"},
         ]),
         hide_index=True,
         use_container_width=True,
     )
-    with st.expander("How the 6-stage pipeline works", expanded=True):
+    with st.expander("How the pipeline works", expanded=True):
         st.markdown(
-            "1. **Validate**: Fuzzy column mapping and description safety checks.\n"
-            "2. **Score**: Profile matching against full JD context with truthful failure detection.\n"
-            "3. **Tailor**: Fact-bound resume alignment without hallucinatory skill invention.\n"
-            "4. **Render**: Playwright Chromium single-page PDF rendering.\n"
-            "5. **Check**: Strict 1-page bounds, clean URLs, 4-digit years, and kerning audit.\n"
-            "6. **Package**: Verified PDFs, summary CSV, and HTML report bundled into ZIP archive."
+            "1. Validate the CSV and score every job with DeepSeek Flash.\n"
+            "2. Check available job and company sources for shortlisted roles.\n"
+            f"3. Draft a resume for jobs at or above {SCORE_THRESHOLD}% match (up to {MAX_RESUMES} per batch).\n"
+            "4. Render a single-page A4 PDF and verify the layout locally.\n"
+            f"5. Send the PDF to DeepSeek Flash for an independent review at {APPROVAL_THRESHOLD}/100.\n"
+            f"6. Revise based on the findings for up to {MAX_DRAFTS} drafts.\n"
+            "7. Package approved resumes with the results reports."
         )
     with st.expander("Quotas, recovery & reviewing outputs"):
-        st.write("The decoupled engine enforces provider limits and recovery checkpoints. Runs can be resumed across server restarts using your recovery code.")
-        st.write("Always review tailored content before submitting applications. Single-page PDFs undergo automated verification against ATS layout standards.")
+        st.write("Every batch is checkpointed in SQLite. An interrupted run can be resumed with its recovery code, "
+                 "and scoring tokens are never spent twice.")
+        st.write("Always review tailored content before submitting applications. Single-page PDFs undergo automated "
+                 "verification against ATS layout standards.")
 
 # ------------------------------------------
 # TAB: WORKSPACE (Setup -> Live Pipeline -> Results)
 # ------------------------------------------
 with tab_batch:
-    # --------------------------------------
-    # STAGE 1: SETUP
-    # --------------------------------------
-    section("01", "Set up your batch", "Choose your inputs and set a limit before you start.")
-    c_full_name = candidate_card(st.session_state.profile)
+    section("01", "Set up your batch", "Upload the jobs CSV and start the locked pipeline.")
+    candidate_card(st.session_state.profile)
 
-    upload_col, settings_col = st.columns([1.7, 1], gap="large")
+    upload_col, policy_col = st.columns([1.7, 1], gap="large")
     parsed_jobs = None
 
     with upload_col:
@@ -601,349 +423,115 @@ with tab_batch:
         else:
             st.caption("Company, role and description required. Common column names are detected automatically.")
 
-        st.divider()
-        st.markdown("##### Candidate master profile")
-        cprof_c1, cprof_c2 = st.columns([1.2, 1])
-        with cprof_c1:
-            quick_prof = st.file_uploader(
-                "Upload profile (.yaml / .json)",
-                type=["yaml", "yml", "json"],
-                key="ws_quick_profile_uploader",
-                disabled=is_running,
-                help="Quickly switch candidate profile for this batch.",
-            )
-            if quick_prof is not None:
-                if st.button("Apply profile to workspace", key="ws_btn_apply_prof", use_container_width=True):
-                    try:
-                        new_prof = load_profile_from_str(quick_prof.getvalue().decode("utf-8-sig"))
-                        apply_profile(new_prof)
-                        st.session_state.profile_editor = profile_to_yaml_str(new_prof)
-                        st.toast("Profile applied successfully!", icon="✅")
-                        st.rerun()
-                    except Exception as err:
-                        st.error(f"Could not apply profile: {err}")
-        with cprof_c2:
-            active_info = st.session_state.profile.get("personal_information", {})
-            st.caption("Active: **" + escape(f"{active_info.get('name', 'Jane')} {active_info.get('surname', 'Doe')}") + "**")
-            st.download_button(
-                "Export active profile (.yaml)",
-                profile_to_yaml_str(st.session_state.profile),
-                file_name="master_profile.yaml",
-                mime="text/yaml",
-                use_container_width=True,
-                key="ws_dl_active_profile",
-            )
-            st.download_button(
-                "Blank template (.yaml)",
-                profile_to_yaml_str(DEFAULT_PROFILE_TEMPLATE),
-                file_name="candidate_profile_template.yaml",
-                mime="text/yaml",
-                use_container_width=True,
-                key="ws_dl_blank_template",
-            )
-
-    with settings_col:
+    with policy_col:
         with st.container(border=True):
-            st.markdown("##### Batch limits")
+            st.markdown("##### Locked policy")
             if is_running:
                 st.markdown('<div class="locked-badge">&#128274; Configuration locked</div>', unsafe_allow_html=True)
-            score_threshold = st.slider(
-                "Match threshold (%)",
-                40,
-                90,
-                value=int(st.session_state.get("score_threshold", 70)),
-                step=5,
-                key="setup_score_threshold",
-                disabled=is_running,
-                help="Generate resumes for jobs at or above this score.",
+            st.markdown(
+                f"- Engine: **{MODEL_LABEL}** (`{MODEL}`)\n"
+                f"- Match threshold: **{SCORE_THRESHOLD}%**\n"
+                f"- Resume cap: **{MAX_RESUMES}**\n"
+                f"- Challenger approval: **{APPROVAL_THRESHOLD}/100**\n"
+                f"- Draft limit: **{MAX_DRAFTS}**\n"
+                f"- Candidate: **{OWNER_NAME}**"
             )
-            max_resumes = st.slider(
-                "Resume limit",
-                1,
-                100,
-                value=int(st.session_state.get("max_resumes", 20)),
-                key="setup_max_resumes",
-                disabled=is_running,
-                help="Maximum resume generation attempts per batch.",
-            )
-            st.session_state["score_threshold"] = score_threshold
-            st.session_state["max_resumes"] = max_resumes
+            if not server_key_ready:
+                st.error("Server is missing DEEPSEEK_API_KEY.")
 
     if parsed_jobs:
         cost = estimate_batch_cost(
             total_jobs=len(parsed_jobs),
-            provider=provider,
-            model=selected_model,
-            is_gemini_free=is_gemini_free,
-            max_resumes=max_resumes,
+            max_resumes=MAX_RESUMES,
             expected_shortlist_rate=0.50,
         )
-        budget_label = cost["cost_display"].replace("🎉", "").strip()
+        budget_label = escape(cost["cost_display"])
         st.markdown(
             f'<div class="estimate">'
-            f'<strong>Estimated budget · {escape(budget_label)}</strong>'
-            f'<span>~{cost["total_tokens"]:,} tokens · ~{cost["estimated_tailored"]} resumes</span>'
+            f'<strong>Estimated load · ~{cost["total_tokens"]:,} tokens</strong>'
+            f'<span>{budget_label} · ~{cost["estimated_tailored"]} tailored resumes</span>'
             f'</div>',
             unsafe_allow_html=True,
         )
-        st.caption("Planning estimate from the cost estimator. Actual provider usage and token billing may vary.")
+        st.caption(f"Up to {min(len(parsed_jobs), MAX_RESUMES) * MAX_DRAFTS} drafts and DeepSeek reviews. "
+                   "Revisions and source checks can increase token usage.")
 
-    existing_checkpoint = session_manager.load_checkpoint(session_id)
-    checkpoint_completed_jobs = []
-    checkpoint_resume_index = 0
-    if existing_checkpoint and parsed_jobs:
-        completed = existing_checkpoint.get("completed_jobs", [])
-        if 0 < len(completed) < len(parsed_jobs):
-            checkpoint_completed_jobs = completed
-            checkpoint_resume_index = len(completed)
-            st.warning(f"Checkpoint available: {len(completed)} jobs processed. Resume only with the same CSV, profile and settings.")
-
-    can_run = bool(parsed_jobs) and bool(api_keys_list)
+    can_run = bool(parsed_jobs and server_key_ready)
     missing = []
     if not parsed_jobs:
         missing.append("upload a valid jobs CSV")
-    if not api_keys_list:
-        missing.append("add your API key in the sidebar")
-    st.caption("To start, " + " and ".join(missing) + "." if missing else "Ready to run with your active candidate profile.")
+    if not server_key_ready:
+        missing.append("configure DEEPSEEK_API_KEY on the server")
+    st.caption("To start, " + " and ".join(missing) + "." if missing else "Ready to score, tailor, and review.")
 
-    actions = st.columns([2, 1, 1] if checkpoint_resume_index else [3, 1])
+    actions = st.columns([2, 1])
     with actions[0]:
-        btn_run = st.button("Start batch", type="primary", use_container_width=True, disabled=not can_run)
-    btn_resume = False
-    if checkpoint_resume_index:
-        with actions[1]:
-            btn_resume = st.button(
-                f"Resume at job {checkpoint_resume_index + 1}",
-                disabled=not can_run,
-                use_container_width=True,
-            )
-    with actions[-1]:
-        if st.button("Clear results", use_container_width=True):
-            batch_runner.clear_batch(session_id)
-            session_manager.clear_checkpoint(session_id)
+        if st.button("Start batch", type="primary", use_container_width=True, disabled=not can_run or is_running):
+            try:
+                config = RunConfig(
+                    run_id=f"run_{uuid.uuid4().hex[:12]}",
+                    provider=PROVIDER,
+                    model=MODEL,
+                    score_threshold=SCORE_THRESHOLD,
+                    max_resumes=MAX_RESUMES,
+                    reviewer_model=REVIEW_MODEL,
+                    approval_threshold=APPROVAL_THRESHOLD,
+                    max_drafts=MAX_DRAFTS,
+                )
+                new_id, code = run_service.create_run(
+                    config, st.session_state.profile, [JobInput.from_dict(job) for job in parsed_jobs],
+                )
+            except (RuntimeError, ValueError) as error:
+                st.error(str(error))
+            else:
+                clear_results()
+                st.session_state.current_run_id = new_id
+                st.session_state.current_recovery_code = code
+                batch_runner.start_batch(new_id, code)
+                st.rerun()
+    with actions[1]:
+        if st.button("Clear results", use_container_width=True, disabled=is_running):
             clear_results()
             st.rerun()
 
-    # --------------------------------------
-    # STAGE 2: LIVE PIPELINE
-    # --------------------------------------
-    section("02", "Live pipeline", "Stages track the current job. Counters track the whole batch.")
-    pipeline_box = st.empty()
-    rate_note = "Gemini Free Tier active (15 RPM cap: ~4s/call) · Auto-cooldown active" if is_gemini_free else None
-    pipeline_box.markdown(
-        st.session_state.get(
-            "pipeline_view",
-            pipeline_html(total=len(parsed_jobs or []), rate_limit_note=rate_note),
-        ),
-        unsafe_allow_html=True,
-    )
-    progress_bar = st.progress(
-        st.session_state.get("pipeline_progress", 0),
-        text="Completed jobs; packaging is tracked separately.",
-    )
-    status_box = st.empty()
-
-    if (btn_run or btn_resume) and parsed_jobs is not None:
-        st.session_state["batch_running"] = True
-        status_box.info(f"Starting batch evaluation for {len(parsed_jobs)} jobs in background...")
-        st.toast(f"Starting batch evaluation for {len(parsed_jobs)} jobs...", icon="🚀")
-        clear_results()
-
-        clean_provider = (
-            "gemini"
-            if "gemini" in provider.lower()
-            else ("deepseek" if "deepseek" in provider.lower() else "openai")
-        )
-
-        run_id = f"run_{session_id}"
-        plain_recovery_code = generate_recovery_code()
-        try:
-            if run_store_instance.get_run(run_id):
-                run_store_instance.delete_run(run_id)
-            if run_store_instance.get_queued_runs_count() >= 10:
-                with run_store_instance._get_connection() as conn:
-                    conn.execute(
-                        "UPDATE runs SET status = ? WHERE status IN (?, ?)",
-                        (RunStatus.CANCELLED.value, RunStatus.PENDING.value, RunStatus.AWAITING_CREDENTIALS.value),
-                    )
-            job_inputs = [
-                JobInput(
-                    job_id=compute_stable_job_id(j["company"], j["title"], j["jd_text"]),
-                    company=j["company"],
-                    title=j["title"],
-                    jd_text=j["jd_text"],
-                    location=j.get("location", ""),
-                    url=j.get("url", j.get("apply_url", "")),
-                    raw_row_index=i,
-                )
-                for i, j in enumerate(parsed_jobs)
-            ]
-            run_config = RunConfig(
-                run_id=run_id,
-                provider=clean_provider,
-                model=selected_model,
-                score_threshold=score_threshold,
-                max_resumes=max_resumes,
-                is_gemini_free=is_gemini_free,
-            )
-            created_run_id, plain_recovery_code = run_service.create_run(
-                config=run_config,
-                profile=st.session_state.profile,
-                jobs=job_inputs,
-            )
-            run_id = created_run_id
-            run_store_instance.update_run_status(run_id, RunStatus.RUNNING)
-        except Exception as e:
-            logger.error(f"Error creating run: {e}")
-
-        st.session_state["current_recovery_code"] = plain_recovery_code
-        st.session_state["current_run_id"] = run_id
-
-        is_test_env = bool(os.environ.get("PYTEST_CURRENT_TEST"))
-
-        def ui_update_cb(stage, company, role, complete=False, failed=False):
-            st.session_state.pipeline_view = pipeline_html(
-                stage=stage,
-                company=company,
-                role=role,
-                results=st.session_state.get("batch_results") or [],
-                total=len(parsed_jobs),
-                complete=complete,
-                failed=failed,
-                rate_limit_note=rate_note,
-            )
-            if complete:
-                st.session_state.pipeline_progress = 1.0
-
-        batch_runner.start_batch(
-            session_id=session_id,
-            jobs=parsed_jobs,
-            profile=st.session_state.profile,
-            provider=clean_provider,
-            api_keys=api_keys_list,
-            model=selected_model,
-            score_threshold=score_threshold,
-            max_resumes=max_resumes,
-            is_gemini_free=is_gemini_free,
-            gemini_rpm=gemini_rpm,
-            resume_from_checkpoint=btn_resume,
-            wait_until_complete=is_test_env,
-            on_pipeline_update=ui_update_cb if is_test_env else None,
-        )
-
-        if is_test_env:
-            res_state = batch_runner.get_run_state(session_id)
-            if res_state.get("status") == "completed":
-                st.session_state.batch_results = res_state.get("results")
-                st.session_state.summary_csv = res_state.get("summary_csv")
-                z_path = res_state.get("zip_path")
-                if z_path and os.path.exists(z_path):
-                    with open(z_path, "rb") as f:
-                        st.session_state.zip_bytes = f.read()
-                st.session_state.pipeline_progress = 1.0
-                st.session_state.pipeline_view = pipeline_html(
-                    results=st.session_state.batch_results,
-                    total=len(st.session_state.batch_results),
-                    complete=True,
-                )
-                try:
-                    run_store_instance.update_run_status(run_id, RunStatus.COMPLETED)
-                    for r in st.session_state.batch_results:
-                        j_res = JobResult(
-                            job_id=r.get("job_id", compute_stable_job_id(r["company"], r["title"], r.get("jd_text", ""))),
-                            company=r["company"],
-                            title=r["title"],
-                            match_score=r.get("match_score", 0),
-                            status=r.get("status", "Evaluated"),
-                            pdf_path=r.get("pdf_path"),
-                            scoring_status=r.get("scoring_status", "success"),
-                            audit_result=r.get("audit_result"),
-                        )
-                        run_store_instance.save_job_result(run_id, j_res, Stage.RENDER if r.get("pdf_path") else Stage.SCORE)
-                except Exception:
-                    pass
-                if counts(st.session_state.batch_results)["attention"]:
-                    status_box.warning("Batch finished with jobs needing attention. Review their details below.")
-                else:
-                    status_box.success("Batch finished. Your downloads are ready.")
-            elif res_state.get("status") == "failed":
-                st.session_state.batch_results = res_state.get("results") or None
-                st.session_state.pipeline_view = pipeline_html(
-                    stage="Scoring",
-                    company="Batch interrupted",
-                    role="Processing stopped",
-                    results=st.session_state.batch_results or [],
-                    total=len(parsed_jobs),
-                    failed=True,
-                )
-                status_box.error(f"Batch interrupted: {res_state.get('error')}. Completed work is shown below; check the checkpoint before retrying.")
-            st.session_state["batch_running"] = False
-        else:
-            st.rerun()
-
-    # Active Background Execution Rendering (Survives client closing tab/phone)
-    if batch_runner.is_running(session_id):
-        run_st = batch_runner.get_run_state(session_id)
-        phase_raw = run_st.get("phase", "scoring")
-        phase_str = phase_raw.title()
-        completed = run_st.get("completed_count", 0)
-        total = run_st.get("total_jobs", len(parsed_jobs) if parsed_jobs else 1)
-        curr = run_st.get("current_job") or {}
-        interim_results = run_st.get("results") or []
-        start_ts = run_st.get("start_time")
-        elapsed_sec = int(time.time() - start_ts) if start_ts else None
-
-        curr_company = curr.get("company", "Evaluating")
-        curr_role = curr.get("title", "Job Description")
-        curr_stage = curr.get("stage", phase_str)
-
-        status_box.info(
-            f"🚀 **Background batch running on server** · **Phase:** {phase_str} · **Evaluating:** {curr_company} — *{curr_role}*\n\n"
-            f"ℹ️ *You can safely close this browser or turn off your device.* "
-            f"Processing continues in the background on the server and saves every step to disk. When you return, your results will be ready here."
-        )
-
-        pipeline_box.markdown(
-            pipeline_html(
-                stage=curr_stage,
-                company=curr_company,
-                role=curr_role,
-                results=interim_results,
-                total=total,
-                rate_limit_note=rate_note,
-                elapsed_seconds=elapsed_sec,
-            ),
-            unsafe_allow_html=True,
-        )
-
-        if phase_raw == "tailoring":
-            t_curr = run_st.get("tailoring_current", 0)
-            t_total = run_st.get("tailoring_total", max(1, run_st.get("qualified_count", 1)))
-            t_progress = min(1.0, max(0.0, t_curr / max(1, t_total)))
-            progress_bar.progress(
-                t_progress,
-                text=f"Phase 2 of 2: Tailoring resumes · {t_curr} of {t_total} shortlisted resumes ({int(t_progress * 100)}%)",
-            )
-        else:
-            progress_val = min(1.0, max(0.0, completed / max(1, total)))
-            progress_bar.progress(
-                progress_val,
-                text=f"Phase 1 of 2: Scoring jobs · {completed} of {total} evaluated ({int(progress_val * 100)}%)",
-            )
-
-        c_stop, _ = st.columns([1, 2])
-        with c_stop:
-            if st.button("⏸️ Pause / Stop background batch", key="btn_stop_batch", use_container_width=True):
-                batch_runner.stop_batch(session_id)
-                st.toast("Paused batch.", icon="⏸️")
+    section("02", "Live pipeline", "Follow job scoring, PDF rendering, and challenger decisions.")
+    if authorized:
+        with st.expander("Recovery code"):
+            st.code(recovery_code, language=None)
+        start_error = batch_runner.get_error(run_id)
+        if start_error:
+            st.error(start_error)
+        status = active_run_state["status"]
+        if not is_running and status in ("paused", "awaiting_credentials", "failed", "pending"):
+            message = events[0]["message"] if events else status
+            if status == "failed":
+                st.error(message)
+            else:
+                st.warning(message)
+            if st.button("Resume saved batch", disabled=not server_key_ready):
+                batch_runner.start_batch(run_id, recovery_code)
                 st.rerun()
 
-        logs = run_st.get("logs", [])
-        if logs:
-            st.markdown(render_live_log_console(logs=logs, max_lines=12), unsafe_allow_html=True)
+        if is_running or status == "failed":
+            current = events[0] if events else {}
+            st.session_state.pipeline_view = pipeline_html(
+                stage="Score" if status == "failed" else current.get("stage", "Validate"),
+                company=current.get("message", "Starting background batch"), role="",
+                results=active_run_state["completed_jobs"], total=active_run_state["total_jobs"],
+                failed=status == "failed",
+            )
+    st.markdown(st.session_state.get("pipeline_view", pipeline_html(total=len(parsed_jobs or []))), unsafe_allow_html=True)
 
-        # Smooth auto-refresh loop for live clients
-        time.sleep(2)
+    if authorized and is_running:
+        total = active_run_state["total_jobs"]
+        processed = active_run_state["completed_count"]
+        st.progress(min(1.0, processed / max(1, total)), text=f"{processed}/{total} jobs scored")
+        if st.button("Pause background batch", key="btn_stop_batch", use_container_width=True):
+            run_service.pause_run(run_id, recovery_code)
+            st.info("Pause requested. In-flight stages will save their progress.")
+        if events:
+            st.markdown(render_live_log_console([event["message"] for event in reversed(events)]), unsafe_allow_html=True)
+        time.sleep(1)
         st.rerun()
 
     # --------------------------------------
@@ -957,91 +545,30 @@ with tab_batch:
         st.markdown(
             metric_strip((
                 ("Jobs processed", c["processed"]),
-                ("PDFs generated", c["generated"]),
+                ("Approved PDFs" if review_required else "Unreviewed PDFs", c["generated"]),
                 ("Average match", f"{avg_score}%"),
                 ("Needs attention", c["attention"]),
             )),
             unsafe_allow_html=True,
         )
 
-        if c["attention"] > 0:
-            ret_c1, ret_c2 = st.columns([2, 1])
-            with ret_c1:
-                st.warning(f"{c['attention']} job(s) failed or require attention.")
-            with ret_c2:
-                if st.button(f"Retry failed jobs ({c['attention']})", key="btn_retry_failed", use_container_width=True):
-                    clean_provider = (
-                        "gemini"
-                        if "gemini" in provider.lower()
-                        else ("deepseek" if "deepseek" in provider.lower() else "openai")
-                    )
-                    retry_acc = []
-                    t_count = sum(1 for r in results if r.get("pdf_path"))
-                    for r in results:
-                        if result_group(r) == "Needs attention":
-                            try:
-                                scored = run_coro_sync(
-                                    score_job_async(
-                                        job=r,
-                                        profile=st.session_state.profile,
-                                        model=selected_model,
-                                        provider=clean_provider,
-                                        api_keys=api_keys_list,
-                                    )
-                                )
-                                score = scored.get("match_score", 0)
-                                if score >= score_threshold and t_count < max_resumes:
-                                    t_count += 1
-                                    tailored = run_coro_sync(
-                                        tailor_resume_async(
-                                            job=scored,
-                                            profile=st.session_state.profile,
-                                            model=selected_model,
-                                            provider=clean_provider,
-                                            api_keys=api_keys_list,
-                                        )
-                                    )
-                                    scored["tailored_resume"] = tailored
-                                    pdf_path = generate_single_page_pdf(
-                                        tailored_resume=tailored,
-                                        output_dir=resumes_dir,
-                                        job=scored,
-                                    )
-                                    scored["pdf_path"] = pdf_path
-                                    scored["pdf_filename"] = os.path.basename(pdf_path)
-                                    scored["status"] = "Tailored & Verified"
-                                else:
-                                    scored["pdf_path"] = None
-                                    scored["pdf_filename"] = None
-                                    scored["status"] = "Below Threshold" if score < score_threshold else "Cap Reached"
-                                retry_acc.append(scored)
-                            except Exception as re_err:
-                                r["status"] = f"Retry Error: {str(re_err)[:30]}"
-                                retry_acc.append(r)
-                        else:
-                            retry_acc.append(r)
-                    st.session_state.batch_results = retry_acc
-                    s_csv = generate_summary_csv(retry_acc)
-                    s_html = render_summary_html(
-                        results=retry_acc,
-                        candidate_name=c_full_name,
-                        threshold=score_threshold,
-                    )
-                    v_pdfs = [r["pdf_path"] for r in retry_acc if r.get("pdf_path")]
-                    st.session_state.zip_bytes = build_batch_zip_bytes(
-                        pdf_paths=v_pdfs,
-                        summary_csv_str=s_csv,
-                        summary_html_str=s_html,
-                    )
-                    st.session_state.summary_csv = s_csv
-                    st.success("Retry complete.")
-                    st.rerun()
+        usage = active_run_state.get("usage", {})
+        if usage:
+            st.caption(f"Recorded tokens across scoring, drafts, and reviews · {usage.get('total_tokens', 0):,}")
+        if c["attention"]:
+            st.warning(f"{c['attention']} job(s) require attention.")
+            retryable = any("error" in r["status"].lower() or r["scoring_status"] == "failed" for r in results)
+            if authorized and retryable and st.button(
+                "Retry failed stages", disabled=not server_key_ready,
+            ):
+                batch_runner.start_batch(run_id, recovery_code)
+                st.rerun()
 
         download_cols = st.columns([2, 1, 1])
         with download_cols[0]:
             if st.session_state.zip_bytes:
                 st.download_button(
-                    f"Download ZIP · {c['generated']} resumes + reports",
+                    "Download approved ZIP" if review_required else "Download unreviewed ZIP",
                     st.session_state.zip_bytes,
                     file_name="jobhunt_tailored_batch.zip",
                     mime="application/zip",
@@ -1058,11 +585,7 @@ with tab_batch:
                     use_container_width=True,
                 )
         with download_cols[2]:
-            s_html = render_summary_html(
-                results=st.session_state.batch_results,
-                candidate_name=c_full_name,
-                threshold=score_threshold,
-            )
+            s_html = st.session_state.summary_html
             st.download_button(
                 "Download HTML Report",
                 s_html,
@@ -1077,7 +600,7 @@ with tab_batch:
         with filter_col:
             group = st.selectbox(
                 "Show",
-                ["All jobs", "Tailored & Verified", "Below Threshold", "Failed", "Skipped", "Needs attention"],
+                ["All jobs", "Approved", "Below Threshold", "Failed", "Skipped", "Needs attention"],
                 key="result_group",
             )
 
@@ -1093,6 +616,7 @@ with tab_batch:
                         "Company": r.get("company"),
                         "Role": r.get("title"),
                         "Match": r.get("match_score", 0),
+                        "Challenger": r.get("challenger_score"),
                         "Status": display_status(r),
                         "Location": r.get("location"),
                         "Reason": r.get("reason"),
@@ -1104,7 +628,7 @@ with tab_batch:
                 column_config={"Match": st.column_config.ProgressColumn("Match", min_value=0, max_value=100, format="%d%%")},
             )
 
-            st.caption("PDF checks are shown only after an explicit check. Review AI-generated content before applying.")
+            st.caption("Review the PDF and the challenger findings before applying.")
 
             for idx, r in enumerate(filtered):
                 with st.expander(f"{r.get('company')} · {r.get('title')} · {r.get('match_score', 0)}%"):
@@ -1116,7 +640,25 @@ with tab_batch:
                     if is_safe_url(raw_url):
                         st.link_button("View job posting", raw_url)
 
-                    # Side-by-Side Review: Original JD vs Tailored Resume Content
+                    context = r.get("company_context") or {}
+                    for warning in context.get("warnings", []):
+                        st.caption(warning)
+                    for i, source in enumerate(context.get("sources", []), start=1):
+                        if is_safe_url(source["url"]):
+                            st.link_button(f"View {source['kind']} source {i}", source["url"])
+                    for attempt in r.get("attempts", []):
+                        review = attempt.get("review")
+                        if review:
+                            verdict = "approved" if review["approved"] else "needs changes"
+                            st.text(f"Draft {attempt['number']} · {review['score']:.1f}/100 · {verdict}")
+                            for finding in review["findings"]:
+                                st.text(f"{finding['section']} · {finding['evidence']} · {finding['correction']}")
+                        for error in (attempt.get("audit") or {}).get("errors", []):
+                            st.text(error)
+                    if r.get("error"):
+                        st.caption(r["error"])
+
+                    # Side-by-side review
                     c_jd, c_tailor = st.columns(2, gap="medium")
                     with c_jd:
                         st.markdown('<div class="review-panel-title">Original Job Description</div>', unsafe_allow_html=True)
@@ -1132,18 +674,20 @@ with tab_batch:
                         st.markdown('<div class="review-panel-title">AI Tailored Resume Content</div>', unsafe_allow_html=True)
                         tailored_data = r.get("tailored_resume")
                         if tailored_data:
-                            sum_text = tailored_data.get("summary", "Summary tailored to role requirements.")
-                            st.markdown(f"**Targeted Summary:**\n\n{sum_text}")
+                            sum_text = tailored_data.get("profile_summary", "Summary tailored to role requirements.")
+                            st.text(sum_text)
                             skills_arr = tailored_data.get("skills", [])
                             if skills_arr:
                                 st.caption("Prioritized Skills: " + ", ".join(skills_arr[:8]))
                         elif r.get("pdf_path"):
-                            st.info("Verified single-page resume generated. Download or inspect checks below.")
+                            st.info("A resume PDF is available below.")
                         else:
                             st.caption(f"No resume generated for this job ({display_status(r)}).")
 
                     # Actual PDF ATS Audit Checklist & Download
-                    p_path = r.get("pdf_path")
+                    approved_content = approved_pdf_bytes(r) if review_required else None
+                    is_approved = approved_content is not None
+                    p_path = r.get("pdf_path") if is_approved or not review_required else r.get("draft_path")
                     if p_path and Path(p_path).is_file():
                         file = Path(p_path)
                         check_id = f"{r.get('job_id', idx)}:{file.stat().st_mtime_ns}"
@@ -1151,8 +695,8 @@ with tab_batch:
                         dcol, acol = st.columns([2, 1])
                         with dcol:
                             st.download_button(
-                                "Download PDF",
-                                file.read_bytes(),
+                                "Download approved PDF" if is_approved else "Download draft PDF",
+                                approved_content if is_approved else file.read_bytes(),
                                 file_name=file.name,
                                 mime="application/pdf",
                                 key=f"pdf_{idx}_{r.get('job_id')}",
@@ -1179,34 +723,16 @@ with tab_batch:
                     elif p_path:
                         st.warning("This PDF is no longer available. It may have expired or been deleted.")
 
-            if st.session_state.get("current_recovery_code"):
-                with st.expander("Batch run controls & recovery code", expanded=False):
-                    st.markdown(f"**Current Recovery Code:** `{st.session_state.get('current_recovery_code')}`")
-                    st.caption("Use this code to verify, inspect, or delete this run in the sidebar or across sessions.")
-                    del_c1, del_c2 = st.columns([1, 1])
-                    with del_c1:
-                        if st.button("Delete run & purge artifacts", key="btn_purge_active_run", use_container_width=True):
-                            c_id = st.session_state.get("current_run_id")
-                            c_code = st.session_state.get("current_recovery_code")
-                            try:
-                                if c_id and c_code:
-                                    run_service.delete_run(c_id, c_code)
-                            except Exception:
-                                pass
-                            session_manager.cleanup_session(session_id)
-                            session_manager.clear_checkpoint(session_id)
-                            batch_runner.clear_batch(session_id)
-                            clear_results()
-                            st.success("Run purged successfully.")
-                            st.rerun()
-                    with del_c2:
-                        if st.button("Clear results view", key="btn_clear_active_results", use_container_width=True):
-                            batch_runner.clear_batch(session_id)
-                            session_manager.clear_checkpoint(session_id)
-                            clear_results()
-                            st.rerun()
     else:
-        st.markdown(
-            '<div class="empty-state">Your results will appear here.<br>Upload a jobs CSV and start a batch to get going.</div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown("Your results will appear here after the batch processes jobs.")
+
+    if authorized and not is_running:
+        with st.expander("Run management"):
+            if st.button("Delete run & purge artifacts", key="btn_purge_active_run"):
+                try:
+                    run_service.delete_run(run_id, recovery_code)
+                except (RuntimeError, PermissionError) as error:
+                    st.error(str(error))
+                else:
+                    clear_results()
+                    st.rerun()

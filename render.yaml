@@ -1,6 +1,6 @@
 # Render Production Deployment Blueprint
-# Uses persistent disk to preserve SQLite runs and artifacts across restarts and deploys.
-# Notice: A persistent disk restricts the service to a single instance (numInstances: 1).
+# Private, single-owner studio. A persistent disk keeps SQLite runs and artifacts
+# across restarts and deploys, which restricts the service to one instance.
 services:
   - type: web
     name: jobhunt-ai-studio
@@ -9,6 +9,8 @@ services:
     plan: standard
     region: oregon
     numInstances: 1
+    autoDeploy: true
+    healthCheckPath: /_stcore/health
     disk:
       name: jobhunt-data
       mountPath: /var/data
@@ -18,3 +20,8 @@ services:
         value: 8501
       - key: PERSISTENT_DATA_DIR
         value: /var/data
+      # Server-owned secrets. Set these in the Render dashboard, never in git.
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: STUDIO_ACCESS_KEY
+        sync: false

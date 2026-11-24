@@ -21,6 +21,8 @@ def build_batch_zip_bytes(
     pdf_paths: List[str],
     summary_csv_str: Optional[str] = None,
     summary_html_str: Optional[str] = None,
+    *,
+    pdf_contents: Optional[dict[str, bytes]] = None,
 ) -> bytes:
     """
     Creates an in-memory ZIP archive bytes buffer containing:
@@ -37,14 +39,18 @@ def build_batch_zip_bytes(
             if not p:
                 continue
             path_obj = Path(p)
-            if path_obj.is_file() and path_obj.stat().st_size > 0:
+            content = pdf_contents.get(p) if pdf_contents is not None else None
+            if content or (pdf_contents is None and path_obj.is_file() and path_obj.stat().st_size > 0):
                 filename = path_obj.name
                 if filename in added_names:
                     # Prevent zip collision
                     filename = f"{path_obj.stem}_{len(added_names)}{path_obj.suffix}"
                 added_names.add(filename)
                 arcname = f"resumes/{filename}"
-                zf.write(path_obj, arcname=arcname)
+                if content is not None:
+                    zf.writestr(arcname, content)
+                else:
+                    zf.write(path_obj, arcname=arcname)
             else:
                 logger.warning(f"Packager skipping invalid or missing PDF: {p}")
 

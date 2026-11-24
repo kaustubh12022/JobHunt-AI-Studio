@@ -48,12 +48,12 @@ def test_multi_run_isolation_and_credentials(service_env):
     svc, store = service_env
 
     # Run A
-    cfg_a = RunConfig(run_id="run_alpha", provider="gemini", model="gemini-3.5-flash-lite")
+    cfg_a = RunConfig(run_id="run_alpha", provider="deepseek", model="deepseek-flash")
     jobs_a = [JobInput(job_id="ja1", company="AlphaCorp", title="Dev", jd_text="Code")]
     run_id_a, code_a = svc.create_run(cfg_a, profile={"name": "Alice"}, jobs=jobs_a)
 
     # Run B
-    cfg_b = RunConfig(run_id="run_beta", provider="openai", model="gpt-4o-mini")
+    cfg_b = RunConfig(run_id="run_beta", provider="deepseek", model="deepseek-flash")
     jobs_b = [JobInput(job_id="jb1", company="BetaCorp", title="Tester", jd_text="Test")]
     run_id_b, code_b = svc.create_run(cfg_b, profile={"name": "Bob"}, jobs=jobs_b)
 
@@ -81,7 +81,7 @@ def test_independent_packaging_and_audit_filtering(service_env):
     """
     svc, store = service_env
 
-    cfg = RunConfig(run_id="run_pack_test", provider="gemini", model="gemini-3.5-flash-lite")
+    cfg = RunConfig(run_id="run_pack_test", provider="deepseek", model="deepseek-flash", reviewer_model=None)
     jobs = [
         JobInput(job_id="j1", company="GoodCompany", title="Engineer", jd_text="Good JD"),
         JobInput(job_id="j2", company="BadCompany", title="Developer", jd_text="Bad JD"),

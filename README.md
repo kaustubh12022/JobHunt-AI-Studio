@@ -1,273 +1,244 @@
 # JobHunt AI Studio
 
+[![Private Studio](https://img.shields.io/badge/Access-Owner--only-111827?logo=lock&logoColor=white)](#-locked-by-design)
 [![Live App](https://img.shields.io/badge/Render-Live_App-2563eb?logo=render&logoColor=white)](https://jobhunt-ai-studio.onrender.com)
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-blue.svg?logo=python&logoColor=white)](https://www.python.org/)
-[![Playwright](https://img.shields.io/badge/Playwright-Chromium-green.svg?logo=playwright&logoColor=white)](https://playwright.dev/)
-[![Tests](https://img.shields.io/badge/Tests-48_Passed-success.svg)](https://github.com/kaustubh12022/JobHunt-AI-Studio)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![DeepSeek](https://img.shields.io/badge/AI-DeepSeek_V4.1_Flash-4d6bfe)](https://platform.deepseek.com/)
+[![Playwright](https://img.shields.io/badge/PDF-Playwright_Chromium-green.svg?logo=playwright&logoColor=white)](https://playwright.dev/)
+[![Tests](https://img.shields.io/badge/Tests-56_Passed-success.svg)](https://github.com/kaustubh12022/JobHunt-AI-Studio)
 
-**JobHunt AI Studio** is an autonomous, production-ready AI resume tailoring and batch evaluation engine. It enables job seekers, freshers, and experienced engineers to upload batch job listings (CSV), evaluate candidate-job relevance with zero-hallucination guardrails, and generate tailored, single-page, ATS-compliant PDF resumes bundled into ready-to-download ZIP archives.
+**JobHunt AI Studio** is the private, single-owner resume tailoring and batch job-evaluation
+pipeline built for **Kaustubh Kale**. It scores an uploaded batch of job listings against his
+master profile, researches the shortlisted companies, drafts and renders tailored single-page
+ATS resumes, sends every rendered PDF through an independent DeepSeek review, and packages only
+the approved resumes into a downloadable bundle.
 
 ---
 
-## 🌐 Live Web Studio
-
-You can test and use the live application right now without installing anything locally:
+## 🌐 Live Studio
 
 👉 **[https://jobhunt-ai-studio.onrender.com](https://jobhunt-ai-studio.onrender.com)**
+
+The deployment is locked: a visitor must present the owner passphrase before any profile,
+workspace or run data is rendered.
 
 ---
 
 ## 📖 Table of Contents
-1. [Core Features & Architecture](#-core-features--architecture)
-2. [Key Terms & System Concepts](#-key-terms--system-concepts)
-3. [CSV Format & Scraper Configuration](#-csv-format--scraper-configuration)
-4. [Supported AI Providers & Models](#-supported-ai-providers--models)
-5. [Candidate Profile Customization](#-candidate-profile-customization)
-6. [Local Setup & Quick Start](#-local-setup--quick-start)
-7. [Running Tests](#-running-tests)
-8. [Production Deployment (Render)](#-production-deployment-render)
-9. [Security, Privacy & Safety](#-security-privacy--safety)
+1. [Locked by Design](#-locked-by-design)
+2. [Owner Profile](#-owner-profile)
+3. [Pipeline](#-pipeline)
+4. [Jobs CSV Format](#-jobs-csv-format)
+5. [Local Setup](#-local-setup)
+6. [Running Tests](#-running-tests)
+7. [Production Deployment (Render)](#-production-deployment-render)
+8. [Security Model](#-security-model)
+9. [Project Structure](#-project-structure)
 
 ---
 
-## 🌟 Core Features & Architecture
+## 🔒 Locked by Design
 
-- **Setup → Live Pipeline → Results Workflow**: Clean, minimalist UI built with Streamlit, optimized for desktop and mobile browsers.
-- **Full JD Context Preservation**: Sends raw, complete job descriptions to the AI (zero aggressive stripping of technical criteria, qualifications, or requirements).
-- **Dynamic Role Lens Alignment**: Automatically detects job archetypes:
-  - **Testing / QA / SDET Roles**: Dynamically prioritizes **Work Experience before Projects**.
-  - **Developer / Java / Full Stack Roles**: Dynamically prioritizes **Projects before Work Experience**.
-- **Automated Single-Page Playwright Renderer**: Converts Jinja2 templates into exact A4 single-page PDFs with automated font density and margin compaction.
-- **Programmatic ATS Verification Gate**: Every generated PDF is audited with `ats_verifier.py` (strict 1-page bounds, clean plain-text URLs, 4-digit years `YYYY`, contact location, and zero kerning glitches).
-- **Restart & Crash Recovery**: Interrupted batch runs automatically transition to `awaiting_credentials`. Users supply their recovery code to resume right where they left off without paying duplicate AI scoring tokens.
-- **Zero API Key Persistence**: API keys exist solely in memory during active processing runs. Keys are never saved to disk, SQLite, environment variables, or shared caches.
-- **Multi-Tenant State Isolation**: Every batch execution is backed by an isolated SQLite WAL store and private session workspace.
+The original open studio let any visitor enter an API key, upload a profile and run batches.
+That model has been removed completely:
 
----
-
-## 🔑 Key Terms & System Concepts
-
-If you are a new user or developer, here are the essential terms used throughout the studio:
-
-| Term | Meaning & Purpose |
+| Concern | Locked behaviour |
 | :--- | :--- |
-| **Master Profile** | Your single source of truth (`.yaml` format). Contains verified degrees, real projects, real employers, verified dates, and master skill inventory. The AI **never** hallucinates outside this profile. |
-| **Recovery Code** | A cryptographically random 12-character token (e.g. `jh-a1b2-c3d4-e5f6`) issued to every batch. Allows you to resume interrupted runs or reload results from any browser. |
-| **Role Lens** | The architectural category detected from the job title and JD (e.g. `qa`, `java`, `dotnet`, `fullstack`). Dictates layout ordering and technical emphasis. |
-| **Match Threshold (%)** | Relevance score (0–100%) cutoff. Only jobs scoring equal to or above this threshold have tailored resumes generated (default: `70%`). |
-| **Resume Cap** | Maximum number of tailored resumes generated per batch to conserve API quota and budget. |
-| **ATS Audit** | Automated programmatic validation inspecting PDF dimensions, text streams, and structure to guarantee 100% Applicant Tracking System compliance. |
+| **Entry** | Owner passphrase (`STUDIO_ACCESS_KEY`) required before anything private renders. Fails closed if unset. |
+| **Candidate profile** | Bundled at [`data/profile.yaml`](data/profile.yaml); reloaded on every run. No upload, editor, sample switch or browser restore. |
+| **AI provider** | DeepSeek only. No provider, model, tier or quota controls. |
+| **API keys** | One server-owned `DEEPSEEK_API_KEY`. No key inputs, no per-session keys, no local storage of credentials. |
+| **Batch policy** | Fixed in [`core/settings.py`](core/settings.py): 70% match threshold, 20 resumes, 3 drafts, 85/100 approval. No sliders. |
+| **Persistence** | No "remember me" / browser profile or credential storage. |
+
+Changing the identity, engine or policy now requires editing repository code and redeploying —
+not clicking around in the web UI.
 
 ---
 
-## 📋 CSV Format & Scraper Configuration
+## 👤 Owner Profile
 
-If you are scraping jobs from LinkedIn, Indeed, Naukri, or n8n webhooks, configure your scraper to output a standard CSV.
+[`data/profile.yaml`](data/profile.yaml) is the single source of truth for every score and every
+tailored resume. It contains Kaustubh's real, verified information:
 
-### Recommended CSV Schema
+- **Identity** — Kaustubh Kale · Pune, Maharashtra, India · `kaustubh.kale.work@gmail.com`
+- **Education** — B.E. Information Technology, SKNSITS Lonavala (SPPU), 2022–2026, CGPA 7.51/10
+- **Experience** — Java Developer Intern, CWIPedia Technologies (Jan–Feb 2025)
+- **Projects (6)** — SmartApply, CampFlow, Neon-Pulse, Personal AI OS, MedFlow, C54-Casino
+- **Skills (60+)** — Java, Python, SQL, JavaScript, TypeScript, Spring Boot, Hibernate/JPA,
+  React, Next.js, Node.js, Express, MongoDB, FastAPI, LangChain, DeepSeek API, Prompt
+  Engineering, RAG, MCP tool calling, AsyncIO, Pandas, Docker-adjacent tooling, Git, Azure
+  Fundamentals, and more, grouped into Core Languages, Java & Backend, MERN & Frontend,
+  Applied AI & Automation, CS Fundamentals, and Cloud/DevOps/Tools
+- **Certifications** — Microsoft Azure Fundamentals (AZ-900), Google Cybersecurity Certificate
+- **Target roles** — Java Developer, Software Engineer, Backend Developer, Full Stack Developer,
+  AI / GenAI Developer
+
+The **Master profile** tab renders all of it read-only and offers a YAML download.
+
+---
+
+## ⚙️ Pipeline
+
+1. **Validate** — strict CSV parsing (5 MB, 100 jobs, 30k chars per JD, stable job IDs).
+2. **Score** — DeepSeek Flash returns a 0–100 match score, a 10–14 word reason, a role summary,
+   genuinely missing skills and a testing-role flag.
+3. **Research** — bounded, SSRF-hardened fetch of the posting and official company pages.
+4. **Tailor** — DeepSeek rewrites the summary, skills and bullet points strictly inside the
+   owner profile; a sanitizer rejects invented employers, degrees, projects and skills.
+5. **Render** — Playwright renders a single-page A4 PDF with JavaScript disabled.
+6. **Check** — local ATS audit (one page, A4 bounds, no clipping, readable text, clean URLs).
+7. **Challenge** — DeepSeek independently reviews the actual PDF text *and* a page image, scoring
+   requirements, factual accuracy, layout, company match and writing. Below 85/100 or any
+   blocking finding triggers a revision, up to 3 drafts.
+8. **Package** — only approved, hash-verified resumes are bundled with the CSV/HTML reports.
+
+Runs are checkpointed in SQLite; an interrupted batch can be resumed with its recovery code
+without re-paying for completed scoring.
+
+---
+
+## 📋 Jobs CSV Format
 
 ```csv
 company_name,job_role,job_description,direct_apply_link,location
 ```
 
-### Column Specifications
+| Column | Status | Accepted headers |
+| :--- | :---: | :--- |
+| **Company** | Required | `company`, `company_name`, `employer`, `organization` |
+| **Job title** | Required | `title`, `job_title`, `role`, `position`, `designation` |
+| **Description** | Required | `job_description`, `jd_text`, `description`, `content` |
+| **Apply URL** | Optional | `url`, `apply_link`, `apply_url`, `job_link` |
+| **Company website** | Optional | `company_website`, `official_website` |
+| **Location** | Optional | `location`, `city`, `work_mode` |
 
-| Column Header | Status | Description & Rules | Example |
-| :--- | :---: | :--- | :--- |
-| **`company_name`** *(or `company`)* | **Required** | Hiring organization name. Used in prompts, resume headers, and filenames. | `Amazon`, `Stripe` |
-| **`job_role`** *(or `job_title`, `title`)* | **Required** | Position title. Used for role lens detection and resume designation. | `Software Dev Engineer I`, `Java Developer` |
-| **`job_description`** *(or `jd_text`, `description`)* | **Required** | Complete raw job posting text. Minimum 50 characters, max 30,000 characters. HTML tags are stripped automatically. | `Looking for a backend engineer with Java, Spring Boot, MySQL...` |
-| **`direct_apply_link`** *(or `apply_link`, `url`)* | **Recommended** | Direct application URL. Rendered as a clickable link in summary tables. | `https://amazon.jobs/en/jobs/2049182` |
-| **`location`** | **Optional** | Location or work mode. Defaults to candidate's city if missing. | `Pune, India / Hybrid`, `Remote` |
-
-### Sample Copy-Paste CSV
-
-```csv
-company_name,job_role,job_description,direct_apply_link,location
-"Amazon","Software Dev Engineer I (SDE 1)","We are looking for entry-level software developers. Responsibilities include building scalable distributed systems, writing clean code in Java or Python, working with relational databases and AWS services. Requirements: Bachelor's degree in CS/IT, strong problem solving in Data Structures and Algorithms.","https://amazon.jobs/en/jobs/2049182","Bangalore, India"
-"Innovaccer","Associate Software Engineer - Java","Looking for graduate engineers to design and build scalable microservices using Java, Spring Boot, and REST APIs. Responsibilities include database design with MySQL, writing unit tests with JUnit, and collaborating with Agile teams. Knowledge of SQL and Git is required.","https://careers.innovaccer.com/jobs/ase-java","Noida, India / Hybrid"
-```
-
-> **Scraper Best Practices**:
-> - Enclose job descriptions in standard quotes (`""`) to protect multi-line paragraphs and newlines.
-> - Output in standard **UTF-8** encoding.
-> - The parser includes **fuzzy column synonym matching**, so headers like `Company Name`, `Role`, `Job Description`, or `Job Link` are recognized automatically.
+Headers are matched case-insensitively with synonym detection. A sample CSV is downloadable
+from the Guide tab and lives at [`data/sample_jobs.csv`](data/sample_jobs.csv).
 
 ---
 
-## 🤖 Supported AI Providers & Models
-
-JobHunt AI Studio supports three enterprise AI providers. You can bring your own API key:
-
-### 1. Google Gemini
-- **Free Tier (Default)**: Automatically switches to **`gemini-3.5-flash-lite`** with a 15 requests-per-minute (RPM) rate limit and multi-key rotation pool. Costs **$0.00**.
-- **Paid Tier**: Allows selecting higher-tier models such as `gemini-2.5-flash`, `gemini-2.5-pro`, or `gemini-1.5-flash` with configurable RPM limits.
-- Supports providing multiple Gemini keys (comma-separated) for seamless rotation.
-
-### 2. DeepSeek
-- Models: `deepseek-chat` (DeepSeek-V3) and `deepseek-reasoner` (DeepSeek-R1).
-- Direct high-speed API integration at competitive token pricing.
-
-### 3. OpenAI
-- Models: `gpt-4o-mini` (Default economical model) and `gpt-4o`.
-
----
-
-## 👤 Candidate Profile Customization
-
-The system generates resumes by tailoring your master profile. You can inspect or modify your profile in **Tab 2 ("Candidate Profile")**:
-
-1. **In-Browser Editor**: Edit your personal information, skills, education, internships, and projects directly in the UI and click **Apply Profile Changes**.
-2. **Upload YAML**: Upload an existing `profile.yaml` file conforming to the standard schema:
-
-```yaml
-personal_information:
-  name: "Jane"
-  surname: "Doe"
-  email: "jane.doe@example.com"
-  phone: "+1-555-0199"
-  city: "San Francisco"
-  country: "United States"
-  linkedin: "linkedin.com/in/janedoe"
-  github: "github.com/janedoe"
-
-education_details:
-  - degree: "Bachelor of Science in Computer Science"
-    university: "University of California, Berkeley"
-    dates: "2022 - 2026"
-    score: "Cumulative GPA: 3.8 / 4.0"
-
-experience_details:
-  - company: "Tech Innovations Inc"
-    position: "Software Engineering Intern"
-    dates: "Jun 2025 - Aug 2025"
-    location: "San Francisco, CA"
-    key_responsibilities:
-      - "Engineered backend microservices using Java and Spring Boot, reducing latency by 22%."
-      - "Integrated RESTful APIs and optimized SQL database queries for high-throughput transactions."
-
-projects:
-  - name: "Distributed Task Scheduler"
-    tech_stack: "Python, Redis, Docker, FastAPI"
-    link: "github.com/janedoe/task-scheduler"
-    description_bullets:
-      - "Architected a distributed background worker pool processing 10,000+ jobs per minute."
-      - "Implemented Redis pub/sub messaging and deployed containerized services via Docker."
-
-skills:
-  - "Java"
-  - "Python"
-  - "Spring Boot"
-  - "FastAPI"
-  - "PostgreSQL"
-  - "Docker"
-  - "Git"
-```
-
-3. **Public Sample Profile**: If testing the studio for the first time, click **Load Sample Profile** to prefill fictional credentials.
-
----
-
-## 💾 Browser Auto-Remember & 1-Click Portability
-
-JobHunt AI Studio gives candidates full persistence without compromising security:
-
-- **Browser Auto-Remember (Private `localStorage`)**:
-  - In the sidebar under **Device persistence (Remember me)**, click **Save device** to remember your API keys, AI provider, and master profile across browser sessions.
-  - Zero credentials touch server disks or databases; everything remains in your local browser sandbox.
-  - Click **Clear device** at any time to wipe stored data.
-- **1-Click Profile Upload & Export**:
-  - **In Workspace (Setup Tab)**: Upload your `.yaml` profile directly alongside your CSV without switching tabs.
-  - **Export Active Profile**: Download your customized profile as YAML with one click.
-  - **Blank Template Download**: Grab a clean, pre-structured `candidate_profile_template.yaml` directly from the Workspace, Candidate Profile, or Guide tabs.
-
----
-
-## 🚀 Local Setup & Quick Start
-
-If you want to run JobHunt AI Studio locally on your computer:
+## 🚀 Local Setup
 
 ### 1. Prerequisites
-- Python 3.10, 3.11, or 3.12
+- Python 3.12
 - Git
 
-### 2. Clone Repository
+### 2. Clone and install
 ```bash
 git clone https://github.com/kaustubh12022/JobHunt-AI-Studio.git
 cd JobHunt-AI-Studio
-```
-
-### 3. Set Up Virtual Environment
-```bash
-# Windows
 python -m venv .venv
+
+# Windows
 .\.venv\Scripts\activate
-
 # macOS / Linux
-python3 -m venv .venv
 source .venv/bin/activate
-```
 
-### 4. Install Dependencies & Playwright
-```bash
 pip install -r requirements.txt
 pip install -r requirements-dev.txt
 playwright install chromium
 ```
 
-### 5. Start Application
-```bash
-# Windows quick-launcher
-start.bat
+### 3. Configure secrets
+Copy [`.env.example`](.env.example) to `.env` and set:
 
-# Or direct command
+```ini
+DEEPSEEK_API_KEY=sk-your-deepseek-api-key
+STUDIO_ACCESS_KEY=a-long-random-owner-passphrase
+```
+
+Generate the passphrase with:
+```bash
+python -c "import secrets; print('jh-'+secrets.token_urlsafe(24))"
+```
+
+`.env` is git-ignored and is never baked into the Docker image.
+
+### 4. Start
+```bash
 streamlit run app.py
 ```
-Open your browser at `http://localhost:8501`.
+Open `http://localhost:8501`, enter the owner passphrase, and use the Workspace tab.
 
 ---
 
 ## 🧪 Running Tests
 
-The test suite includes 48 unit and integration tests covering SQLite ACID transactions, worker lease recovery, input safety, URL sanitization, multi-role tailoring, Playwright ATS PDF verification, and browser storage portability:
+The suite covers the locked profile, owner gate, DeepSeek client retries and credential
+errors, truthfulness of failures, CSV safety, SQLite leases/recovery, PDF rendering and ATS
+auditing, reviewer parsing, packaging and UI behaviour:
 
 ```bash
 pytest tests -o pythonpath=. -v
 ```
 
+56 tests, no live provider calls required.
+
 ---
 
 ## ☁️ Production Deployment (Render)
 
-JobHunt AI Studio is turnkey-ready for deployment on [Render](https://render.com) using Docker and persistent disks.
+The repository ships a Render Blueprint ([`render.yaml`](render.yaml)) and Docker image.
 
-### 1-Click Blueprint Deployment
-1. Fork or clone this repository to your GitHub account.
-2. In the [Render Dashboard](https://dashboard.render.com), click **New +** → **Blueprint**.
-3. Select your repository `JobHunt-AI-Studio`.
-4. Render reads [`render.yaml`](render.yaml) automatically:
-   - Sets runtime to **Docker** (`python:3.12-slim-bookworm`).
-   - Attaches a **1 GB Persistent Disk** (`jobhunt-data`) mounted at `/var/data` for SQLite durability.
-   - Sets `PORT=8501` and `PERSISTENT_DATA_DIR=/var/data`.
-5. Click **Apply**. Render builds the container, installs Chromium, mounts the disk, and takes the service live!
+1. In the Render Dashboard, create a **Blueprint** from this repository.
+2. Render builds the Docker image (`python:3.12-slim-bookworm`), installs Chromium, and mounts
+   the 1 GB persistent disk at `/var/data`.
+3. Set the two server-owned secrets in the service's **Environment** tab:
 
-For advanced disaster recovery and backup instructions, refer to [`DEPLOYMENT.md`](DEPLOYMENT.md).
+| Variable | Purpose |
+| :--- | :--- |
+| `DEEPSEEK_API_KEY` | The one key used for scoring, drafting and review. |
+| `STUDIO_ACCESS_KEY` | Owner passphrase that unlocks the studio (min. 12 chars). |
+
+4. Deploy. Existing environment variables are never copied into the image or repository.
+
+Optionally set `DEEPSEEK_INPUT_PER_M` / `DEEPSEEK_OUTPUT_PER_M` to display USD pricing in the
+batch estimate; without them the studio shows a token-only estimate rather than inventing a price.
+
+Health check: `GET /_stcore/health` → `ok`. Operational notes live in [`DEPLOYMENT.md`](DEPLOYMENT.md).
 
 ---
 
-## 🛡️ Security, Privacy & Safety
+## 🛡️ Security Model
 
-JobHunt AI Studio was architected with enterprise data privacy standards:
+1. **Fails closed** — no `STUDIO_ACCESS_KEY` means the studio refuses to open at all.
+2. **No secret in git** — `.env`, keys and passphrases are excluded from the image and repo.
+3. **Ephemeral credentials** — the DeepSeek key lives in process memory for the request only.
+4. **Hashed recovery codes** — runs are indexed by SHA-256, raw codes are never stored.
+5. **CSV injection defense** — exported cells beginning with `= + - @` are neutralized.
+6. **Hardened rendering** — headless Chromium runs with JavaScript disabled and external
+   requests blocked; company research rejects private/loopback addresses.
+7. **Non-root container** — production runs as `appuser` (UID 10001).
 
-1. **Ephemeral Keys**: Your API keys are held exclusively in process memory for the duration of your active batch and discarded immediately afterward.
-2. **Encrypted Recovery Codes**: Batches are indexed by a SHA-256 cryptographic hash of the recovery code. Raw recovery codes are never stored in plaintext.
-3. **CSV Formula Injection Defense**: All exported cells starting with `=`, `+`, `-`, `@`, `\t`, or `\r` are neutralized with prepended quotes to prevent spreadsheet execution vulnerabilities.
-4. **Hardened Headless Chromium**: PDF rendering runs with `java_script_enabled=False` and blocks external network requests to prevent XSS payloads and SSRF leaks.
-5. **Non-Root Container**: Production Docker builds run strictly under the unprivileged `appuser` (UID 10001).
+---
+
+## 🗂️ Project Structure
+
+```
+app.py                     Locked Streamlit studio (owner gate + workspace)
+ui.py                      Presentation components and design-system helpers
+core/
+  settings.py              Locked identity, engine, policy
+  access.py                Owner passphrase gate
+  ai_engine.py             DeepSeek client (retries, JSON mode, multimodal)
+  models_catalog.py        DeepSeek-only model catalog
+  scorer.py                Match scoring
+  resume_tailor.py         Profile-bound tailoring + hallucination sanitizer
+  resume_review.py         PDF inspection + DeepSeek challenger
+  pdf_generator.py         Playwright A4 renderer
+  ats_verifier.py          ATS acceptance audit
+  run_service.py           Worker orchestration, checkpoints, packaging
+  run_store.py             SQLite runs/jobs/events/artifacts
+  packager.py              ZIP bundle builder
+  profile_manager.py       Bundled owner profile loader
+data/profile.yaml          Kaustubh's locked master profile
+tests/                     56 unit/integration tests
+Dockerfile · render.yaml   Production container and Render blueprint
+```
 
 ---
 
 ## 📄 License
 
-Distributed under the MIT License. See `LICENSE` for more information.
+Distributed under the MIT License. See [`LICENSE`](LICENSE) for details.

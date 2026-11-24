@@ -21,6 +21,7 @@ from core.security import (
     MAX_JOBS_PER_RUN,
     compute_stable_job_id,
     is_safe_url,
+    sanitize_url,
 )
 
 COLUMN_SYNONYMS = {
@@ -40,6 +41,7 @@ COLUMN_SYNONYMS = {
         "url", "job_url", "joburl", "link", "apply_link", "apply_url",
         "job_link", "posting_url", "href", "source_url"
     ],
+    "company_website": ["company_website", "company_site", "official_website"],
     "location": [
         "location", "city", "work_mode", "job_location", "place", "state", "country"
     ],
@@ -194,6 +196,7 @@ def parse_jobs_csv(
             "url": raw_url or "N/A",
             "location": raw_location or "Not specified",
             "raw_row_index": row_num,
+            "company_website": sanitize_url(row.get(mapping.get("company_website", ""), "") or ""),
         })
 
         if len(jobs) > MAX_JOBS_PER_RUN:
@@ -222,7 +225,7 @@ def generate_sample_csv_str() -> str:
         {
             "Company": "Tata Consultancy Services (TCS)",
             "Job Title": "Python / AI Automation Engineer",
-            "Job Description": "TCS is seeking engineers to work on automation pipelines using Python, AsyncIO, REST API integrations, and generative AI models (OpenAI, Gemini). Requirements include knowledge of Python, Pandas, SQL databases, Git, and prompt engineering.",
+            "Job Description": "TCS is seeking engineers to work on automation pipelines using Python, AsyncIO, REST API integrations, and generative AI models (DeepSeek, OpenAI). Requirements include knowledge of Python, Pandas, SQL databases, Git, and prompt engineering.",
             "Apply Link": "https://www.tcs.com/careers/ai-engineer",
             "Location": "Pune, India"
         }

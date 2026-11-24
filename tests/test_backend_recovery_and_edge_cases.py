@@ -45,14 +45,14 @@ def test_queue_saturation_rejection():
 
         # Create 10 pending runs
         for i in range(MAX_QUEUED_RUNS):
-            cfg = RunConfig(run_id=f"run_queued_{i}", provider="gemini", model="gemini-3.5-flash-lite")
+            cfg = RunConfig(run_id=f"run_queued_{i}", provider="deepseek", model="deepseek-flash")
             jobs = [JobInput(job_id=f"j_{i}", company="Acme", title="Engineer", jd_text="Code")]
             svc.create_run(cfg, profile={"name": "Alice"}, jobs=jobs)
 
         assert store.get_queued_runs_count() == MAX_QUEUED_RUNS
 
         # The 11th run must be rejected
-        cfg_overflow = RunConfig(run_id="run_overflow", provider="gemini", model="gemini-3.5-flash-lite")
+        cfg_overflow = RunConfig(run_id="run_overflow", provider="deepseek", model="deepseek-flash")
         jobs_overflow = [JobInput(job_id="j_overflow", company="Acme", title="Engineer", jd_text="Code")]
         with pytest.raises(RuntimeError) as exc:
             svc.create_run(cfg_overflow, profile={"name": "Alice"}, jobs=jobs_overflow)
@@ -66,7 +66,7 @@ def test_auto_recovery_on_runstore_init():
         store1 = RunStore(db_dir=db_path)
 
         code = generate_recovery_code()
-        cfg = RunConfig(run_id="run_crashed", provider="gemini", model="gemini-3.5-flash-lite")
+        cfg = RunConfig(run_id="run_crashed", provider="deepseek", model="deepseek-flash")
         jobs = [JobInput(job_id="j1", company="Acme", title="Dev", jd_text="Code.")]
         store1.create_run(cfg, profile={}, jobs=jobs, recovery_code_hash=hash_recovery_code(code), input_fingerprint="fp")
 
@@ -93,7 +93,7 @@ def test_resume_does_not_repeat_scoring_and_retries_failed_tailoring():
         store = RunStore(db_dir=Path(tmp_dir))
         svc = RunService(store=store)
 
-        cfg = RunConfig(run_id="run_retry_test", provider="gemini", model="gemini-3.5-flash-lite", score_threshold=70)
+        cfg = RunConfig(run_id="run_retry_test", provider="deepseek", model="deepseek-flash", score_threshold=70)
         jobs = [
             JobInput(job_id="j1", company="AlphaTech", title="Backend Engineer", jd_text="Python FastAPI SQL microservices"),
         ]
@@ -132,23 +132,35 @@ def test_resume_does_not_repeat_scoring_and_retries_failed_tailoring():
             "profile_summary": "Tailored summary for AlphaTech",
             "is_draft_review": True,
         })
+        review = (
+            {"passed": True, "errors": []},
+            {"approved": True, "score": 91, "findings": [], "prompt_tokens": 2, "completion_tokens": 1},
+        )
+
+        def render(tailored_resume, output_dir, job, custom_filename):
+            path = Path(output_dir) / custom_filename
+            path.write_text(tailored_resume["profile_summary"], encoding="utf-8")
+            return str(path), {"passed": True, "errors": []}
 
         with patch("core.run_service.score_job_async", mock_score), \
              patch("core.run_service.tailor_resume_async", mock_tailor), \
-             patch("core.run_service.render_and_audit_pdf", return_value=("/path/to/AlphaTech.pdf", {"passed": True, "errors": []})):
+             patch("core.run_service.render_and_audit_pdf", side_effect=render), \
+             patch("core.run_service.collect_company_context", return_value={"sources": [], "warnings": []}), \
+             patch("core.run_service.review_resume_async", AsyncMock(return_value=review)):
 
             # Run synchronously
-            svc.start_or_resume_run(run_id, code, api_keys=["test-key"], background=False)
+            svc.start_or_resume_run(run_id, code, background=False)
 
         # Confirm score_job_async was NEVER called
         mock_score.assert_not_called()
         # Confirm tailor_resume_async WAS called
         mock_tailor.assert_called_once()
 
-        # Confirm the job is now successfully completed
+        # Confirm the job is now successfully completed and approved
         completed = store.get_completed_job_results(run_id)
         assert len(completed) == 1
-        assert completed[0].status == "Tailored & Verified"
+        assert completed[0].status == "Approved"
+        assert completed[0].review_status == "Approved"
         assert completed[0].match_score == 85
 
 
@@ -158,21 +170,21 @@ def test_resume_with_changed_input_fingerprint_raises_value_error():
         store = RunStore(db_dir=Path(tmp_dir))
         svc = RunService(store=store)
 
-        cfg = RunConfig(run_id="run_fp_test", provider="gemini", model="gemini-3.5-flash-lite")
+        cfg = RunConfig(run_id="run_fp_test", provider="deepseek", model="deepseek-flash", reviewer_model=None)
         jobs = [JobInput(job_id="j1", company="Acme", title="Dev", jd_text="Code")]
         profile = {"personal_information": {"name": "Alice"}}
 
-        fp_original = compute_input_fingerprint([j.to_dict() for j in jobs], profile, 70, 20, "gemini-3.5-flash-lite")
+        fp_original = compute_input_fingerprint([j.to_dict() for j in jobs], profile, 70, 20, "deepseek-flash")
         run_id, code = svc.create_run(cfg, profile=profile, jobs=jobs)
 
         # Attempt to resume with matching fingerprint succeeds
         with patch.object(svc, "_run_worker", new=AsyncMock()):
-            svc.start_or_resume_run(run_id, code, api_keys=["key"], background=False, expected_fingerprint=fp_original)
+            svc.start_or_resume_run(run_id, code, background=False, expected_fingerprint=fp_original)
 
         # Attempt to resume with DIFFERENT fingerprint fails
         fp_changed = "changed_fingerprint_hash_xyz"
         with pytest.raises(ValueError) as exc:
-            svc.start_or_resume_run(run_id, code, api_keys=["key"], background=False, expected_fingerprint=fp_changed)
+            svc.start_or_resume_run(run_id, code, background=False, expected_fingerprint=fp_changed)
         assert "Changed inputs detected" in str(exc.value)
 
 

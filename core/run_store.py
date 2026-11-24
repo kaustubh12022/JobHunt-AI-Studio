@@ -74,7 +74,6 @@ class RunStore:
                     model TEXT NOT NULL,
                     score_threshold INTEGER NOT NULL,
                     max_resumes INTEGER NOT NULL,
-                    is_gemini_free INTEGER NOT NULL,
                     total_jobs INTEGER NOT NULL,
                     completed_count INTEGER DEFAULT 0,
                     verified_resumes_count INTEGER DEFAULT 0,
@@ -131,6 +130,11 @@ class RunStore:
                 CREATE INDEX IF NOT EXISTS idx_jobs_run ON jobs(run_id, raw_index);
                 CREATE INDEX IF NOT EXISTS idx_events_run ON stage_events(run_id, created_at);
             """)
+            # Migrate stores created by the retired multi-provider build.
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(runs)")}
+            if "is_gemini_free" in columns:
+                conn.execute("ALTER TABLE runs DROP COLUMN is_gemini_free")
+                logger.info("Migrated runs table: dropped legacy is_gemini_free column.")
 
     def get_run_artifacts_dir(self, run_id: str) -> Path:
         """Isolated artifacts directory for a specific run."""
@@ -157,11 +161,11 @@ class RunStore:
                 """
                 INSERT INTO runs (
                     run_id, recovery_code_hash, status, provider, model,
-                    score_threshold, max_resumes, is_gemini_free, total_jobs,
+                    score_threshold, max_resumes, total_jobs,
                     completed_count, verified_resumes_count, input_fingerprint,
                     profile_json, config_json, usage_json, lease_owner, lease_expires_at,
                     created_at, updated_at, expires_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -171,7 +175,6 @@ class RunStore:
                     config.model,
                     config.score_threshold,
                     config.max_resumes,
-                    1 if config.is_gemini_free else 0,
                     len(jobs),
                     0,
                     0,
@@ -226,7 +229,7 @@ class RunStore:
         stored_hash = run.get("recovery_code_hash", "")
         return verify_recovery_code(plain_recovery_code, stored_hash)
 
-    def acquire_lease(self, run_id: str, worker_id: str, duration_sec: int = 60) -> bool:
+    def acquire_lease(self, run_id: str, worker_id: str, duration_sec: int = 60, max_active: int = 2) -> bool:
         now = time.time()
         with self._get_connection() as conn:
             cursor = conn.execute(
@@ -235,7 +238,8 @@ class RunStore:
                 SET lease_owner = ?, lease_expires_at = ?, updated_at = ?
                 WHERE run_id = ?
                   AND (lease_owner IS NULL OR lease_owner = ? OR lease_expires_at < ?)
-                  AND status IN (?, ?, ?)
+                  AND status IN (?, ?, ?, ?, ?, ?)
+                  AND (SELECT COUNT(*) FROM runs WHERE run_id != ? AND lease_expires_at > ?) < ?
                 """,
                 (
                     worker_id,
@@ -247,6 +251,10 @@ class RunStore:
                     RunStatus.PENDING.value,
                     RunStatus.RUNNING.value,
                     RunStatus.AWAITING_CREDENTIALS.value,
+                    RunStatus.PAUSED.value,
+                    RunStatus.FAILED.value,
+                    RunStatus.COMPLETED.value,
+                    run_id, now, max_active,
                 ),
             )
             return cursor.rowcount > 0
@@ -317,6 +325,8 @@ class RunStore:
                 WHERE run_id = ? AND result_json IS NOT NULL
                   AND json_extract(result_json, '$.pdf_path') IS NOT NULL
                   AND json_extract(result_json, '$.audit_result.passed') = 1
+                  AND (json_extract(result_json, '$.review_status') = 'Approved' OR
+                       (SELECT json_extract(config_json, '$.reviewer_model') FROM runs WHERE run_id = jobs.run_id) IS NULL)
                 """,
                 (run_id,),
             ).fetchone()["c"]

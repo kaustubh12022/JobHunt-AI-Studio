@@ -29,6 +29,9 @@ class Stage(str, Enum):
     TAILOR = "Tailor"
     RENDER = "Render"
     CHECK = "Check"
+    RESEARCH = "Research"
+    CHALLENGE = "Challenge"
+    REVISE = "Revise"
     PACKAGE = "Package"
 
 
@@ -42,6 +45,7 @@ class JobInput:
     location: str = ""
     raw_row_index: int = 0
     fingerprint: str = ""
+    company_website: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -53,6 +57,7 @@ class JobInput:
             "location": self.location,
             "raw_row_index": self.raw_row_index,
             "fingerprint": self.fingerprint,
+            "company_website": self.company_website,
         }
 
     @classmethod
@@ -66,6 +71,7 @@ class JobInput:
             location=data.get("location", ""),
             raw_row_index=data.get("raw_row_index", 0),
             fingerprint=data.get("fingerprint", ""),
+            company_website=data.get("company_website", ""),
         )
 
 
@@ -92,6 +98,12 @@ class JobResult:
     error: Optional[str] = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    jd_text: str = ""
+    company_context: Optional[Dict[str, Any]] = None
+    attempts: List[Dict[str, Any]] = field(default_factory=list)
+    draft_path: Optional[str] = None
+    challenger_score: Optional[float] = None
+    review_status: str = "Unreviewed"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -116,6 +128,12 @@ class JobResult:
             "error": self.error,
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
+            "jd_text": self.jd_text,
+            "company_context": self.company_context,
+            "attempts": self.attempts,
+            "draft_path": self.draft_path,
+            "challenger_score": self.challenger_score,
+            "review_status": self.review_status,
         }
 
     @classmethod
@@ -142,18 +160,28 @@ class JobResult:
             error=data.get("error"),
             prompt_tokens=data.get("prompt_tokens", 0),
             completion_tokens=data.get("completion_tokens", 0),
+            jd_text=data.get("jd_text", ""),
+            company_context=data.get("company_context"),
+            attempts=data.get("attempts", []),
+            draft_path=data.get("draft_path"),
+            challenger_score=data.get("challenger_score"),
+            review_status=data.get("review_status", "Unreviewed"),
         )
 
 
 @dataclass
 class RunConfig:
+    """Locked run policy. The studio always runs DeepSeek Flash with review."""
+
     run_id: str
-    provider: str
-    model: str
+    provider: str = "deepseek"
+    model: str = "deepseek-flash"
     score_threshold: int = 70
     max_resumes: int = 20
-    is_gemini_free: bool = False
     created_at: float = field(default_factory=time.time)
+    reviewer_model: Optional[str] = "deepseek-flash"
+    approval_threshold: int = 85
+    max_drafts: int = 3
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -162,20 +190,24 @@ class RunConfig:
             "model": self.model,
             "score_threshold": self.score_threshold,
             "max_resumes": self.max_resumes,
-            "is_gemini_free": self.is_gemini_free,
             "created_at": self.created_at,
+            "reviewer_model": self.reviewer_model,
+            "approval_threshold": self.approval_threshold,
+            "max_drafts": self.max_drafts,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> RunConfig:
         return cls(
             run_id=data["run_id"],
-            provider=data["provider"],
-            model=data["model"],
+            provider="deepseek",
+            model=data.get("model") or "deepseek-flash",
             score_threshold=data.get("score_threshold", 70),
             max_resumes=data.get("max_resumes", 20),
-            is_gemini_free=data.get("is_gemini_free", False),
             created_at=data.get("created_at", time.time()),
+            reviewer_model=data.get("reviewer_model", "deepseek-flash"),
+            approval_threshold=data.get("approval_threshold", 85),
+            max_drafts=data.get("max_drafts", 3),
         )
 
 

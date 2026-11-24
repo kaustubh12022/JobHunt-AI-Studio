@@ -1,4 +1,4 @@
-"""
+﻿"""
 Integration & Smoke Tests for JobHunt AI Studio Core Engine.
 Validates:
 - CSV parser with fuzzy synonym mapping
@@ -7,7 +7,7 @@ Validates:
 - Role lens detection & factual sanitization
 - Playwright single-page PDF generation & ATS acceptance audit
 - ZIP packager & executive summaries
-- Cost estimator (Gemini Free $0.00 vs paid)
+- Cost estimator load projection
 - Multi-tenant session isolation and batch recovery checkpointing
 """
 
@@ -22,7 +22,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 import pytest
 from core.csv_parser import parse_jobs_csv, detect_column_mapping, generate_sample_csv_str
-from core.profile_manager import load_profile_from_file, normalize_profile, DEFAULT_PROFILE_TEMPLATE
+from core.profile_manager import load_profile_from_file, load_owner_profile, normalize_profile
 from core.scorer import build_scoring_system_prompt
 from core.resume_tailor import detect_role_lens, sanitize_tailored_resume
 from core.pdf_generator import generate_single_page_pdf
@@ -31,6 +31,21 @@ from core.packager import build_batch_zip_bytes
 from core.summary_reporter import generate_summary_csv, render_summary_html
 from core.cost_estimator import estimate_batch_cost
 from core.session_manager import SessionManager
+from core.settings import MODEL, PROFILE_PATH
+
+
+def test_owner_profile_is_locked_and_complete():
+    """The bundled profile belongs to Kaustubh and carries his full skill/project inventory."""
+    assert PROFILE_PATH.exists(), "data/profile.yaml must exist."
+    profile = load_owner_profile()
+    assert profile["personal_information"]["name"] == "Kaustubh"
+    assert profile["personal_information"]["surname"] == "Kale"
+    assert profile["personal_information"]["email"] == "kaustubh.kale.work@gmail.com"
+    assert len(profile["skills"]) >= 50
+    assert len(profile["projects"]) == 6
+    assert len(profile["experience_details"]) >= 1
+    assert len(profile["education_details"]) >= 1
+    assert "Java Developer" in profile["target_roles"]
 
 
 def test_csv_parser_fuzzy_mapping():
@@ -51,22 +66,22 @@ Meta,QA Automation Tester,Looking for an experienced automation tester with Sele
 
 
 def test_profile_manager_normalization():
-    """Verify profile loading and fallback normalization."""
-    sample_path = PROJECT_ROOT / "data" / "sample_profile.yaml"
-    assert sample_path.exists(), "sample_profile.yaml must exist."
-    profile = load_profile_from_file(sample_path)
+    """Verify profile loading keeps every supplied fact and normalizes field names."""
+    profile = load_profile_from_file("data/profile.yaml")
     assert "personal_information" in profile
-    assert profile["personal_information"]["name"] != ""
+    assert profile["personal_information"]["name"] == "Kaustubh"
     assert len(profile["skills"]) > 5
     assert len(profile["projects"]) > 0
+    assert profile["skills_structured"]["Core Languages"]
 
 
 def test_full_jd_preserved_in_scoring():
     """Verify that full JD is preserved as-is with all company & requirement details intact."""
-    profile = normalize_profile(DEFAULT_PROFILE_TEMPLATE)
+    profile = load_owner_profile()
     prompt = build_scoring_system_prompt(profile)
     assert "CANDIDATE MASTER RESUME" in prompt
     assert "SCORING RULES" in prompt
+    assert "Kaustubh Kale" in prompt
 
 
 def test_role_lens_detection():
@@ -79,7 +94,7 @@ def test_role_lens_detection():
 
 def test_tailored_sanitization_and_dynamic_ordering():
     """Verify that tailored resumes sanitize illegal skills and set is_testing_role correctly."""
-    profile = normalize_profile(DEFAULT_PROFILE_TEMPLATE)
+    profile = load_owner_profile()
     delta = {
         "profile_summary": "Graduate Engineer specializing in backend software engineering.",
         "tailored_skills": ["Python", "Java", "Docker", "FabricatedIllegalSkill123"],
@@ -92,7 +107,7 @@ def test_tailored_sanitization_and_dynamic_ordering():
 
 def test_playwright_single_page_pdf_generation_and_ats_audit():
     """Verify that Playwright renders a PDF and it passes the strict ATS 1-page check."""
-    profile = load_profile_from_file(PROJECT_ROOT / "data" / "sample_profile.yaml")
+    profile = load_profile_from_file(PROJECT_ROOT / "data" / "profile.yaml")
     job = {
         "company": "Innovaccer",
         "title": "Associate Software Engineer - Java",
@@ -141,30 +156,14 @@ def test_zip_packager_and_summary():
     assert len(zip_bytes) > 100
 
 
-def test_cost_estimator_free_and_paid():
-    """Verify cost estimator logic for Gemini Free vs Paid models."""
-    # Free Tier test
-    free_est = estimate_batch_cost(
-        total_jobs=50,
-        provider="gemini",
-        model="gemini-3.5-flash-lite",
-        is_gemini_free=True,
-    )
-    assert free_est["is_free"] is True
-    assert free_est["cost_usd"] == 0.0
-    assert "Free Tier" in free_est["cost_display"]
-    assert free_est["total_tokens"] > 50000
-
-    # Paid DeepSeek test
-    paid_est = estimate_batch_cost(
-        total_jobs=50,
-        provider="deepseek",
-        model="deepseek-chat",
-        is_gemini_free=False,
-    )
-    assert paid_est["is_free"] is False
-    assert paid_est["cost_usd"] > 0.0
-    assert "$" in paid_est["cost_display"]
+def test_cost_estimator_projects_locked_batch_load():
+    """Verify token projection when no USD pricing is configured."""
+    estimate = estimate_batch_cost(total_jobs=50, max_resumes=20)
+    assert estimate["is_free"] is False
+    assert estimate["cost_usd"] is None
+    assert estimate["cost_display"] == "Token estimate only"
+    assert estimate["total_tokens"] > 50000
+    assert estimate["estimated_tailored"] <= 20
 
 
 def test_session_manager_isolation_and_batch_recovery():
@@ -187,8 +186,8 @@ def test_session_manager_isolation_and_batch_recovery():
             total_jobs=100,
             completed_jobs=mock_completed,
             threshold=70,
-            model="gemini-3.5-flash-lite",
-            provider="gemini",
+            model="deepseek-flash",
+            provider="deepseek",
         )
 
         # Load checkpoint

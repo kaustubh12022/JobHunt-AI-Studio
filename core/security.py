@@ -7,6 +7,7 @@ cryptographic recovery code hashing, input fingerprinting, and collision-free na
 from __future__ import annotations
 
 import hashlib
+import json
 import hmac
 import re
 import secrets
@@ -91,19 +92,18 @@ def compute_input_fingerprint(
     threshold: int,
     max_resumes: int,
     model: str,
+    review_policy: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Generates a deterministic hash of the batch inputs and settings.
     Used by checkpoints to verify input identity before resuming.
     """
-    job_signatures = [
-        f"{j.get('job_id', '')}:{j.get('company', '')}:{j.get('title', '')}:{len(j.get('jd_text', ''))}"
-        for j in jobs
-    ]
-    p_info = profile.get("personal_information", {})
-    prof_sig = f"{p_info.get('name', '')}|{p_info.get('surname', '')}|{p_info.get('email', '')}|{len(profile.get('skills', []))}"
-    combined = f"{'#'.join(job_signatures)}||{prof_sig}||t={threshold}||m={max_resumes}||model={model}"
-    return hashlib.sha256(combined.encode("utf-8")).hexdigest()
+    snapshot = {
+        "jobs": jobs, "profile": profile, "threshold": threshold,
+        "max_resumes": max_resumes, "model": model, "review_policy": review_policy,
+    }
+    canonical = json.dumps(snapshot, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def generate_recovery_code() -> str:

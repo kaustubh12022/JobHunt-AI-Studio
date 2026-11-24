@@ -27,7 +27,8 @@ def generate_summary_csv(results: List[Dict[str, Any]]) -> str:
     output = io.StringIO()
     fieldnames = [
         "Company", "Job Title", "Match Score", "Status",
-        "Resume PDF", "Apply URL", "Location", "Match Reason", "Missing Skills"
+        "Resume PDF", "Apply URL", "Location", "Match Reason", "Missing Skills",
+        "Challenger Score", "Resume Review", "Drafts", "Review Findings", "Company Sources", "Source Warnings"
     ]
     writer = csv.DictWriter(output, fieldnames=fieldnames)
     writer.writeheader()
@@ -46,6 +47,9 @@ def generate_summary_csv(results: List[Dict[str, Any]]) -> str:
         skills_str = ", ".join(r.get("missing_skills", [])) if r.get("missing_skills") else "None"
         skills_val = neutralize_csv_cell(skills_str)
 
+        reviews = [a["review"] for a in r.get("attempts", []) if a.get("review")]
+        context = r.get("company_context") or {}
+        review = max(reviews, key=lambda review: (review["approved"], review["score"]), default={})
         writer.writerow({
             "Company": company_val,
             "Job Title": title_val,
@@ -56,6 +60,14 @@ def generate_summary_csv(results: List[Dict[str, Any]]) -> str:
             "Location": loc_val,
             "Match Reason": reason_val,
             "Missing Skills": skills_val,
+            "Challenger Score": r.get("challenger_score"),
+            "Resume Review": neutralize_csv_cell(r.get("review_status", "Unreviewed")),
+            "Drafts": len(r.get("attempts", [])),
+            "Review Findings": neutralize_csv_cell(" | ".join(
+                f"{f['section']}: {f['evidence']} → {f['correction']}" for f in review.get("findings", [])
+            )),
+            "Company Sources": neutralize_csv_cell(" | ".join(source["url"] for source in context.get("sources", []))),
+            "Source Warnings": neutralize_csv_cell(" | ".join(context.get("warnings", []))),
         })
 
     return output.getvalue()
@@ -65,6 +77,7 @@ def render_summary_html(
     results: List[Dict[str, Any]],
     candidate_name: str = "Candidate",
     threshold: int = 70,
+    *, approval_required: bool = False,
 ) -> str:
     """
     Generates a clean HTML summary table report containing ONLY shortlisted jobs where a
@@ -72,10 +85,10 @@ def render_summary_html(
     """
     # Filter strictly to shortlisted jobs with tailored resumes
     shortlisted = [r for r in results if r.get("pdf_path")]
-    target_results = shortlisted if shortlisted else results
+    target_results = shortlisted if approval_required or shortlisted else results
 
     total_jobs = len(results)
-    tailored_count = len(shortlisted) if shortlisted else len(results)
+    tailored_count = len(shortlisted)
     avg_score = (
         round(sum(r.get("match_score", 0) for r in results) / total_jobs, 1)
         if total_jobs > 0 else 0
@@ -103,11 +116,12 @@ def render_summary_html(
             tailored_count=tailored_count,
             avg_score=avg_score,
             threshold=threshold,
+            approval_required=approval_required,
             run_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         )
     except Exception:
         # Safe fallback
-        return f"""<!DOCTYPE html>
+        return """<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
@@ -115,6 +129,5 @@ def render_summary_html(
 </head>
 <body>
     <h1>JobHunt AI Studio — Shortlisted Applications</h1>
-    <p>Candidate: {candidate_name} | Total Jobs: {total_jobs} | Tailored: {tailored_count}</p>
 </body>
 </html>"""
