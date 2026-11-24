@@ -10,7 +10,7 @@ personal_information:
   phone_prefix: "+91"
   phone: "+91-9975526627"
   email: "kaustubh.kale.work@gmail.com"
-  github: "github.com/kaustubhkale12"
+  github: "github.com/kaustubh12022"
   linkedin: "linkedin.com/in/kaustubhkale12"
 
 profile_summary: "Graduate Engineer skilled in Java, Python, SQL, REST APIs, DSA, and full-stack development with internship experience in modular backend services, database optimization, responsive UI, and AI-driven automation pipelines. Strong foundation in Spring Boot, MERN stack (React, Node.js, Express, MongoDB), and Generative AI / DeepSeek integrations."
@@ -44,7 +44,7 @@ experience_details:
 projects:
   - name: "SmartApply: AI-Driven Job Automation Pipeline"
     tech_stack: "Python, AsyncIO, DeepSeek API, Pandas"
-    link: "github.com/kaustubhkale12"
+    link: "github.com/kaustubh12022"
     description_bullets:
       - "Engineered an asynchronous job extraction pipeline scraping 2,000+ live postings daily across multiple portals."
       - "Implemented DeepSeek LLM scoring and JSON schema validation, ranking listings by relevance with >80% cost reduction."
@@ -53,7 +53,7 @@ projects:
 
   - name: "CampFlow: Hospitality Automation & Booking Suite"
     tech_stack: "React, Node.js, Express, MongoDB"
-    link: "github.com/kaustubhkale12"
+    link: "github.com/kaustubh12022"
     description_bullets:
       - "Built a multi-tenant booking and management portal adopted by 5+ commercial business owners to eliminate booking overlaps."
       - "Designed real-time analytics dashboards for Property Managers with automated reservation scheduling and push notifications."
@@ -62,7 +62,7 @@ projects:
 
   - name: "Neon-Pulse – Pattern Recognition & Logic Engine"
     tech_stack: "Vanilla JavaScript, CSS3, HTML5"
-    link: "github.com/kaustubhkale12"
+    link: "github.com/kaustubh12022"
     description_bullets:
       - "Engineered an algorithmic pattern engine with recursive sequence logic managing 20+ scaling difficulty tiers."
       - "Optimized browser DOM rendering and state validation arrays, achieving a zero-lag interactive response cycle."
@@ -70,7 +70,7 @@ projects:
 
   - name: "Personal AI OS: Local LLM & Voice Agent Assistant"
     tech_stack: "Python, Ollama, LangChain, FastAPI, SQLite"
-    link: "github.com/kaustubhkale12"
+    link: "github.com/kaustubh12022"
     description_bullets:
       - "Architected an autonomous local AI workstation agent integrating Ollama local LLMs and LangChain tool chains."
       - "Engineered low-latency voice and text streaming pipelines with asynchronous FastAPI endpoints and SQLite session state."
@@ -79,7 +79,7 @@ projects:
 
   - name: "MedFlow: Healthcare Appointment & Inventory Engine"
     tech_stack: "Java, Spring Boot, MySQL, REST APIs, JWT"
-    link: "github.com/kaustubhkale12"
+    link: "github.com/kaustubh12022"
     description_bullets:
       - "Engineered secure healthcare microservices with Spring Boot, JPA/Hibernate, and MySQL, handling patient scheduling."
       - "Implemented role-based access control with JWT authentication, ensuring HIPAA compliance across hospital departments."
@@ -88,7 +88,7 @@ projects:
 
   - name: "C54-Casino: Real-Time Multiplayer Gaming Platform"
     tech_stack: "React, Node.js, Socket.IO, Tailwind CSS"
-    link: "github.com/kaustubhkale12"
+    link: "github.com/kaustubh12022"
     description_bullets:
       - "Developed a full-stack real-time multiplayer casino platform with interactive card and wheel games."
       - "Built bi-directional WebSocket game loops using Socket.IO, synchronizing multiplayer state across concurrent players."
