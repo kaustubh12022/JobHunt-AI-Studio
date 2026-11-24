@@ -18,6 +18,11 @@ This guide covers deploying the locked, single-owner studio to
   key belongs to the server.
 - **Lifecycle**: inactive runs expire after 24 hours and are purged by the janitor.
 
+> **Current live service.** The public app currently runs on Render's **Free** instance
+> (Oregon, no persistent disk), so its SQLite run store is ephemeral across restarts. The
+> Blueprint in this repository describes the durable paid configuration (`standard` plan +
+> 1 GB disk at `/var/data`); applying it upgrades the instance and restores persistence.
+
 ---
 
 ## 2. Deploy on Render

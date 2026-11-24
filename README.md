@@ -183,7 +183,8 @@ The repository ships a Render Blueprint ([`render.yaml`](render.yaml)) and Docke
 
 1. In the Render Dashboard, create a **Blueprint** from this repository.
 2. Render builds the Docker image (`python:3.12-slim-bookworm`), installs Chromium, and mounts
-   the 1 GB persistent disk at `/var/data`.
+   the 1 GB persistent disk at `/var/data` (paid plan; the current live instance runs on the
+   free tier without the disk, so its run history is ephemeral).
 3. Set the two server-owned secrets in the service's **Environment** tab:
 
 | Variable | Purpose |
